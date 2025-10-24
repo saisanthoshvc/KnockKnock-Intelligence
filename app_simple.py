@@ -1,9 +1,30 @@
-import os
+# app_simple.py
+# --------------------------------------------------------------------------------------
+# ENV VARS you must set in Posit Connect (Settings -> Environment):
+#   RFP_API_URL=https://connect.affiniusaiplatform.com/content/000d3572-937a-4d5c-ab7e-7ec80d80c4ce
+#   RFP_API_KEY_HEADER_NAME=knocknock-authentication
+#   RFP_API_AUTH_SCHEME=Raw
+#   RFP_API_KEY=<YOUR extractor API key value for "knocknock-authentication">
+#
+# Optional (have sensible defaults):
+#   POLL_INTERVAL_SECONDS=2
+#   POLL_TIMEOUT_SECONDS=240
+#   REQUEST_TIMEOUT_SECONDS=60
+#   FLASK_SECRET_KEY=<random string>   # if you want to override default
+#
+# IMPORTANT:
+# - Do NOT use "Authorization: Bearer ..." for this extractor.
+# - The extractor expects the header EXACTLY as:
+#       knocknock-authentication: <token>
+#   (no "Bearer", no "Key" prefix).
+# --------------------------------------------------------------------------------------
+
 import io
+import os
 import json
 import time
-import typing as t
 from datetime import datetime, timedelta
+from typing import Dict, Any
 
 import requests
 from flask import (
@@ -11,249 +32,189 @@ from flask import (
     url_for, send_file
 )
 from werkzeug.utils import secure_filename
-from dotenv import load_dotenv
-load_dotenv()
 
-# ------------------------------------------------------------------------------
-# Flask App
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
+# Flask app & config
+# --------------------------------------------------------------------------------------
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET", "dev-secret-change-me")
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me-in-prod")
 
-# ------------------------------------------------------------------------------
-# Config (ENV-driven; no code edits required when deploying to Connect)
-# ------------------------------------------------------------------------------
-UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "uploads")
+UPLOAD_FOLDER = os.path.abspath(os.getenv("UPLOAD_FOLDER", "uploads"))
 ALLOWED_EXTENSIONS = {"docx", "pdf", "xlsx"}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-DEFAULT_API_CONFIG = {
-    # Your Posit Connect extractor deployment. Either with or without trailing slash is fine.
+# Effective API config (driven by env on Posit Connect)
+api_config: Dict[str, Any] = {
     "base_url": os.getenv(
         "RFP_API_URL",
         "https://connect.affiniusaiplatform.com/content/000d3572-937a-4d5c-ab7e-7ec80d80c4ce",
     ).rstrip("/"),
-    # API key (NEVER hardcode in production; this is pulled from Connect ENV)
-    "api_key": os.getenv("RFP_API_KEY", "CHANGEME"),
-    # If your extractor expects a custom header, set it here, e.g. "knocknock-authentication"
+    "api_key": os.getenv("RFP_API_KEY", ""),  # set in Connect Environment
     "header_name": os.getenv("RFP_API_KEY_HEADER_NAME", "knocknock-authentication"),
-    # One of: Bearer | Key | Raw. Use Raw when header_name is custom.
-    "auth_scheme": os.getenv("RFP_API_AUTH_SCHEME", "Raw"),
+    "auth_scheme": os.getenv("RFP_API_AUTH_SCHEME", "Raw"),  # Raw | Bearer | Key
     "poll_interval": float(os.getenv("POLL_INTERVAL_SECONDS", "2")),
     "poll_timeout": float(os.getenv("POLL_TIMEOUT_SECONDS", "240")),
-    "request_timeout": int(os.getenv("REQUEST_TIMEOUT_SECONDS", "60")),
+    "request_timeout": float(os.getenv("REQUEST_TIMEOUT_SECONDS", "60")),
 }
 
-api_config = DEFAULT_API_CONFIG.copy()
+# In-memory state
+job_data: Dict[str, Dict[str, Any]] = {}
+job_edits: Dict[str, Any] = {}
 
-# ------------------------------------------------------------------------------
-# App Stats (simple JSON file)
-# ------------------------------------------------------------------------------
-STATS_FILE = os.getenv("STATS_FILE", "stats.json")
+# Stats (persist to file in app dir)
+STATS_FILE = os.path.abspath("stats.json")
 
 
-def load_stats() -> dict:
+# --------------------------------------------------------------------------------------
+# Utility functions
+# --------------------------------------------------------------------------------------
+def allowed_file(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def load_stats() -> Dict[str, Any]:
     try:
         if os.path.exists(STATS_FILE):
             with open(STATS_FILE, "r") as f:
                 stats = json.load(f)
-        else:
-            stats = {}
-    except Exception:
-        stats = {}
-    # Defaults
-    stats.setdefault("documents_processed", 0)
-    stats.setdefault("questions_extracted", 0)
-    stats.setdefault("total_processing_time", 0.0)
-    # Derived
-    dp = max(stats.get("documents_processed", 0), 1)
-    stats["avg_processing_time"] = round(
-        float(stats.get("total_processing_time", 0.0)) / dp, 1
-    )
-    stats.setdefault("accuracy_rate", 0.0)
-    stats["last_updated"] = datetime.now().isoformat()
-    return stats
+            dp = stats.get("documents_processed", 0)
+            total = float(stats.get("total_processing_time", 0))
+            stats["avg_processing_time"] = round(total / dp, 1) if dp else 0.0
+            return stats
+    except Exception as e:
+        print(f"[STATS] read error: {e}")
+
+    return {
+        "documents_processed": 0,
+        "questions_extracted": 0,
+        "total_processing_time": 0.0,
+        "avg_processing_time": 0.0,
+        "accuracy_rate": 0.0,
+        "last_updated": datetime.now().isoformat(),
+    }
 
 
-def save_stats(stats: dict):
+def save_stats(stats: Dict[str, Any]) -> None:
     try:
         stats["last_updated"] = datetime.now().isoformat()
         with open(STATS_FILE, "w") as f:
             json.dump(stats, f, indent=2)
     except Exception as e:
-        print(f"DEBUG: Error saving stats: {e}")
+        print(f"[STATS] write error: {e}")
 
 
-def update_stats(questions_count: int, processing_time_seconds: float, questions: t.Optional[t.List[dict]] = None):
+def update_stats(questions_count: int, processing_time: float, questions_data=None):
     stats = load_stats()
     stats["documents_processed"] += 1
     stats["questions_extracted"] += int(questions_count)
-    stats["total_processing_time"] += float(processing_time_seconds)
+    stats["total_processing_time"] += float(processing_time)
 
-    # compute mean confidence if present
-    if questions:
-        vals = []
-        for q in questions:
-            c = q.get("confidence")
+    # derive accuracy from confidence if available
+    if questions_data:
+        total_conf, n = 0.0, 0
+        for q in questions_data:
             try:
+                c = q.get("confidence", None)
                 if c is not None:
-                    vals.append(float(c))
+                    total_conf += float(c)
+                    n += 1
             except Exception:
                 pass
-        if vals:
-            stats["accuracy_rate"] = round(sum(vals) / len(vals) * 100.0, 1)
-        else:
-            # fallback if extractor doesn't supply confidence
-            stats["accuracy_rate"] = max(stats.get("accuracy_rate", 85.0), 85.0)
-    else:
-        stats["accuracy_rate"] = max(stats.get("accuracy_rate", 85.0), 85.0)
+        if n > 0:
+            stats["accuracy_rate"] = round((total_conf / n) * 100, 1)
+        elif stats["accuracy_rate"] == 0.0:
+            stats["accuracy_rate"] = 85.0
+    elif stats["accuracy_rate"] == 0.0:
+        stats["accuracy_rate"] = 85.0
 
     save_stats(stats)
     return stats
 
 
-# ------------------------------------------------------------------------------
-# In-Memory Job Cache (best effort; we still rely on remote polling)
-# ------------------------------------------------------------------------------
-job_data: dict[str, dict] = {}
-job_edits: dict[str, list] = {}
-
-# ------------------------------------------------------------------------------
-# Helpers
-# ------------------------------------------------------------------------------
-def allowed_file(filename: str) -> bool:
-    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-def get_auth_header() -> dict:
-    """Build the authentication header for the extractor call."""
+def get_auth_header() -> Dict[str, str]:
+    """
+    Build the correct header for the extractor:
+      - If header_name == "Authorization": honor scheme (Bearer/Key/Raw)
+      - Else: send the header as-is with the token (RAW)
+    """
     name = api_config["header_name"].strip()
-    key = api_config["api_key"].strip()
-    scheme = (api_config.get("auth_scheme") or "Raw").strip()
+    token = (api_config["api_key"] or "").strip()
+    scheme = (api_config["auth_scheme"] or "Raw").strip().lower()
+
+    if not name or not token:
+        print("[AUTH] Missing header name or token")
+        return {}
 
     if name.lower() == "authorization":
-        if scheme.lower() == "bearer":
-            return {"Authorization": f"Bearer {key}"}
-        elif scheme.lower() == "key":
-            return {"Authorization": f"Key {key}"}
-        else:
-            return {"Authorization": key}
-    # Custom header (e.g. knocknock-authentication)
-    return {name: key}
+        if scheme == "bearer":
+            return {"Authorization": f"Bearer {token}"}
+        elif scheme == "key":
+            return {"Authorization": f"Key {token}"}
+        return {"Authorization": token}
+
+    # RAW, non-Authorization header (what your extractor expects)
+    return {name: token}
 
 
-def _join(base: str, path: str) -> str:
-    return f"{base.rstrip('/')}/{path.lstrip('/')}"
+def _ep(path: str) -> str:
+    return f"{api_config['base_url']}/{path.lstrip('/')}"
 
 
-def _mime_for(filename: str) -> str:
-    ext = filename.rsplit(".", 1)[-1].lower()
-    if ext == "docx":
-        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    if ext == "pdf":
-        return "application/pdf"
-    if ext == "xlsx":
-        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    return "application/octet-stream"
-
-
-def make_api_request(method: str, endpoint: str, **kwargs) -> t.Optional[requests.Response]:
+def make_api_request(method: str, endpoint: str, **kwargs):
     """
-    Single point for calling the extractor. Handles:
-      - trailing slash normalization
-      - **never** setting Content-Type when files=... (requests sets boundary)
+    Centralized API call. Important details:
+      - Use exact paths with trailing slash where required by FastAPI app.
+      - Let 'requests' set Content-Type for multipart (do NOT override).
     """
-    # Normalize common paths. We'll try exact path first, then a fallback with/without slash.
-    candidates = [endpoint]
-    if endpoint.endswith("/"):
-        candidates.append(endpoint.rstrip("/"))
-    else:
-        candidates.append(endpoint.rstrip("/") + "/")
-
+    url = _ep(endpoint)
     headers = get_auth_header()
-    # Never override multipart headers
-    if "files" not in kwargs:
-        headers.update(kwargs.get("headers", {}))
+    # Allow caller to add extra headers if needed (but don't force Content-Type)
+    user_headers = kwargs.pop("headers", {})
+    headers.update(user_headers or {})
 
-    for ep in candidates:
-        url = _join(api_config["base_url"], ep)
-        try:
-            if method.upper() == "GET":
-                resp = requests.get(url, headers=headers, timeout=api_config["request_timeout"])
-            elif method.upper() == "POST":
-                resp = requests.post(url, headers=headers, timeout=api_config["request_timeout"], **kwargs)
-            elif method.upper() == "DELETE":
-                resp = requests.delete(url, headers=headers, timeout=api_config["request_timeout"])
-            else:
-                continue
-            # Prefer a successful response immediately
-            if resp is not None and (resp.status_code < 400 or resp.status_code == 422):
-                # We still return 422 to the caller to decide on fallback
-                return resp
-            # If 404, try next variant
-        except requests.exceptions.RequestException as e:
-            print(f"DEBUG: extractor request error to {url}: {e}")
-            # continue to next candidate
-            continue
-    return None
+    # Debug (redact token)
+    redacted = {k: ("••••••••" if k.lower() == api_config["header_name"].lower() else v) for k, v in headers.items()}
+    print(f"[HTTP] {method.upper()} {url}")
+    print(f"[HTTP] headers: {redacted}")
+
+    try:
+        if method.upper() == "GET":
+            return requests.get(url, headers=headers, timeout=api_config["request_timeout"])
+        if method.upper() == "POST":
+            return requests.post(url, headers=headers, timeout=api_config["request_timeout"], **kwargs)
+        if method.upper() == "DELETE":
+            return requests.delete(url, headers=headers, timeout=api_config["request_timeout"])
+    except requests.exceptions.RequestException as e:
+        print(f"[HTTP] Request error: {e}")
+        return None
 
 
-def _looks_like_validation_error(resp: t.Optional[requests.Response]) -> bool:
-    if resp is None:
-        return False
-    if resp.status_code in (400, 422):
-        body = (resp.text or "").lower()
-        return ("expected pattern" in body) or ("validation" in body) or ("did not match" in body)
-    return False
-
-
-def _redact_headers(h: dict) -> dict:
-    safe = {}
-    for k, v in (h or {}).items():
-        if isinstance(v, str) and len(v) > 8:
-            safe[k] = v[:4] + "••••••••"
-        else:
-            safe[k] = v
-    return safe
-
-
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
 # Routes
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
 @app.route("/")
 def index():
     stats = load_stats()
     return render_template("index.html", api_config=api_config, stats=stats)
 
 
-@app.route("/debug/extractor")
-def debug_extractor():
-    """Live probe from Connect to verify base_url, auth header, and common docs endpoints."""
-    base = api_config["base_url"]
-    hdr = _redact_headers(get_auth_header())
-    probes = {}
-    for p in ("/", "/health", "/info", "/openapi.json", "/docs"):
-        url = _join(base, p)
-        try:
-            r = requests.get(url, headers=get_auth_header(), timeout=10)
-            probes[p] = {
-                "url": url,
-                "status": r.status_code,
-                "ok": r.status_code in (200, 307, 308),
-                "preview": (r.text or "")[:200],
-            }
-        except Exception as e:
-            probes[p] = {"url": url, "error": str(e)}
-    return jsonify({"base_url": base, "headers": hdr, "probes": probes})
+@app.route("/api/config")
+def api_config_echo():
+    """Debug: confirm effective config on the server (token redacted)."""
+    cfg = dict(api_config)
+    if cfg.get("api_key"):
+        cfg["api_key"] = "••••••••"
+    return jsonify(cfg)
 
 
 @app.route("/api/upload", methods=["POST"])
 def upload_file():
     """
-    Upload and extract with robust fallbacks:
-      1) Try sync if requested.
-      2) On 400/422 validation, fall back to async.
-      3) For async, progressively simplify the form (mode→none, use_llm→none) if needed.
+    1) Save file locally (temp).
+    2) POST to /extract/ or /extract/sync with:
+         - multipart 'file'
+         - form fields: use_llm, mode
+    3) Return job_id for async OR questions for sync.
     """
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
@@ -269,106 +230,86 @@ def upload_file():
     filepath = os.path.join(UPLOAD_FOLDER, filename)
     f.save(filepath)
 
-    # UI flags
-    use_llm = request.form.get("use_llm", "false").lower() == "true"
-    use_sync = request.form.get("use_sync", "false").lower() == "true"
-    # The backend may be strict about allowed mode strings; start with 'balanced'
-    mode = (request.form.get("mode") or "balanced").strip()
+    # Client options
+    use_llm = str(request.form.get("use_llm", "false")).lower() in ("true", "1", "yes", "y")
+    use_sync = str(request.form.get("use_sync", "false")).lower() in ("true", "1", "yes", "y")
+    mode = request.form.get("mode", "balanced").strip().lower()
+    if mode not in {"balanced", "fast", "thorough"}:
+        mode = "balanced"
 
-    print(f"DEBUG upload: file={filename}, use_llm={use_llm}, mode={mode}, use_sync={use_sync}")
+    print(f"[UPLOAD] name={filename}, size={os.path.getsize(filepath)} bytes, use_llm={use_llm}, use_sync={use_sync}, mode={mode}")
 
-    def form_payload(m: t.Optional[str] = None, llm: t.Optional[bool] = None) -> dict:
-        payload = {}
-        if llm is not None:
-            payload["use_llm"] = "true" if llm else "false"
-        if m:
-            payload["mode"] = m
-        return payload
+    # Determine mime type from extension
+    ext = filename.rsplit(".", 1)[-1].lower()
+    mime = "application/octet-stream"
+    if ext == "docx":
+        mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    elif ext == "pdf":
+        mime = "application/pdf"
+    elif ext == "xlsx":
+        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    files = {"file": (filename, open(filepath, "rb"), mime)}
+    data = {
+        # Send booleans as strings for form-data to avoid Pydantic "pattern" issues on some setups
+        "use_llm": "true" if use_llm else "false",
+        "mode": mode,
+    }
 
     try:
-        # Prepare reusable bytes
-        with open(filepath, "rb") as fh:
-            file_bytes = fh.read()
-        mime = _mime_for(filename)
-
-        # ------------------------------
-        # 1) Try SYNC (if requested)
-        # ------------------------------
+        endpoint = "extract/sync" if use_sync else "extract/"
+        # IMPORTANT: exact trailing slash like the docs
         if use_sync:
-            files = {"file": (filename, io.BytesIO(file_bytes), mime)}
-            data = form_payload(m=mode, llm=use_llm)
-            print(f"DEBUG sync attempt: endpoint=extract/sync data={data}")
-            r = make_api_request("POST", "extract/sync", files=files, data=data)
+            # docs show "/extract/sync" (no trailing slash here), FastAPI handles it
+            endpoint = "extract/sync"
+        else:
+            endpoint = "extract/"
 
-            if r is not None and r.status_code == 200:
-                try:
-                    payload = r.json() or {}
-                except Exception:
-                    payload = {}
-                if "questions" in payload:
-                    job_id = f"sync_{int(time.time())}"
-                    job_data[job_id] = {
-                        "status": "completed",
-                        "questions": payload["questions"],
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                    update_stats(len(payload["questions"]), 5, payload["questions"])
-                    return jsonify({"success": True, "job_id": job_id, "questions": payload["questions"]})
-                else:
-                    print("DEBUG sync: 200 but no questions → falling back to async")
+        print(f"[UPLOAD] POST -> {endpoint} data={data} (multipart)")
 
-            if _looks_like_validation_error(r):
-                print(f"DEBUG sync: validation error {r.status_code}, body={r.text[:300]}")
-                # fall through to async
-            else:
-                if r is not None and r.status_code >= 500:
-                    return jsonify({"error": f"Sync failed (HTTP {r.status_code}): {r.text}"}), 502
-                # continue to async in all other cases
+        resp = make_api_request("POST", endpoint, files=files, data=data)
+        # Close file handle ASAP
+        files["file"][1].close()
 
-        # ------------------------------
-        # 2) ASYNC primary
-        # ------------------------------
-        def async_attempts() -> t.Optional[dict]:
-            """Try async with (mode+use_llm) → (use_llm only) → (no form), with endpoint variants."""
-            attempts = [
-                ("extract", form_payload(m=mode, llm=use_llm)),
-                ("extract", form_payload(m=None, llm=use_llm)),
-                ("extract", {}),  # final bare minimum
-            ]
-            for ep, data in attempts:
-                files = {"file": (filename, io.BytesIO(file_bytes), mime)}
-                print(f"DEBUG async attempt: endpoint={ep} data={data}")
-                r = make_api_request("POST", ep, files=files, data=data)
-                if r is None:
-                    print("DEBUG async attempt: no response (network or endpoint mismatch)")
-                    continue
-                if r.status_code == 200:
-                    try:
-                        payload = r.json() or {}
-                    except Exception:
-                        payload = {}
-                    job_id = payload.get("job_id")
-                    if job_id:
-                        job_data[job_id] = {"status": "processing", "timestamp": datetime.now().isoformat()}
-                        return {"success": True, "job_id": job_id, "async": True}
-                    else:
-                        print("DEBUG async: 200 but no job_id in payload → continuing")
-                        continue
-                if _looks_like_validation_error(r):
-                    print(f"DEBUG async validation {r.status_code}, body={r.text[:300]} → trying simpler payload")
-                    continue
-                print(f"DEBUG async error {r.status_code}: {r.text[:300]}")
-            return None
+        if not resp:
+            return jsonify({"error": "No response from extractor"}), 502
 
-        ok = async_attempts()
-        if ok:
-            return jsonify(ok)
+        print(f"[UPLOAD] HTTP {resp.status_code}")
+        txt_preview = (resp.text or "")[:600]
+        print(f"[UPLOAD] body: {txt_preview}")
 
-        return jsonify({"error": "Extractor API failed to accept the upload"}), 502
+        if resp.status_code != 200:
+            return jsonify({"error": f"HTTP {resp.status_code}: {resp.text}"}), 500
+
+        payload = resp.json() if resp.headers.get("content-type", "").lower().startswith("application/json") else {}
+        print(f"[UPLOAD] JSON keys: {list(payload.keys())}")
+
+        # SYNC path returns questions directly
+        if use_sync and isinstance(payload, dict) and "questions" in payload:
+            questions = payload.get("questions") or []
+            job_id = f"sync_{int(time.time())}"
+            job_data[job_id] = {
+                "status": "completed",
+                "questions": questions,
+                "timestamp": datetime.now().isoformat(),
+            }
+            # Stats: assume quick sync
+            update_stats(len(questions), 5.0, questions)
+            return jsonify({"success": True, "job_id": job_id, "questions": questions})
+
+        # ASYNC path returns a job_id
+        job_id = payload.get("job_id")
+        if not job_id:
+            return jsonify({"error": "No job_id returned by extractor"}), 502
+
+        job_data[job_id] = {"status": "processing", "timestamp": datetime.now().isoformat()}
+        return jsonify({"success": True, "job_id": job_id, "async": True})
 
     except Exception as e:
+        print(f"[UPLOAD] exception: {e}")
         return jsonify({"error": str(e)}), 500
     finally:
+        # local cleanup
         try:
             if os.path.exists(filepath):
                 os.remove(filepath)
@@ -377,204 +318,178 @@ def upload_file():
 
 
 @app.route("/api/poll/<job_id>")
-def poll_job(job_id: str):
-    """
-    Poll the extractor for job status. If our in-memory cache doesn't have it
-    (multi-process on Connect), we still poll the remote job endpoint.
-    """
-    # If we already have completion cached:
-    cached = job_data.get(job_id)
-    if cached and cached.get("status") == "completed":
-        return jsonify(cached)
+def poll_job(job_id):
+    if job_id not in job_data:
+        return jsonify({"error": "Job not found"}), 404
 
-    # Always hit remote to be robust across multiple processes on Connect
-    r = make_api_request("GET", f"jobs/{job_id}")
-    if r is not None and r.status_code == 200:
-        data = r.json() if r.headers.get("content-type", "").lower().startswith("application/json") else {}
-        status = (data or {}).get("status", "").lower()
+    # If we already have completion
+    if job_data[job_id].get("status") == "completed":
+        return jsonify(job_data[job_id])
 
-        # Cache a minimal view
-        job_data[job_id] = {**(job_data.get(job_id) or {}), **(data or {})}
+    resp = make_api_request("GET", f"jobs/{job_id}")
+    if not resp:
+        return jsonify({"error": "No response while polling"}), 502
 
-        if status == "completed":
-            # Some deployments embed questions directly; others separate them
-            if "questions" in data and data["questions"] is not None:
-                update_stats(len(data["questions"]), 30, data["questions"])
-                return jsonify(data)
+    print(f"[POLL] HTTP {resp.status_code}")
+    if resp.status_code == 404:
+        # Sometimes jobs are GC'd—try direct questions endpoint
+        q = make_api_request("GET", f"jobs/{job_id}/questions")
+        if q and q.status_code == 200:
+            questions = q.json()
+            job_data[job_id] = {"status": "completed", "questions": questions}
+            update_stats(len(questions), 30.0, questions)
+            return jsonify(job_data[job_id])
+        return jsonify({"status": "completed", "questions": []})
 
-            # Try fetching questions separately
-            qr = make_api_request("GET", f"jobs/{job_id}/questions")
-            if qr is not None and qr.status_code == 200:
-                try:
-                    questions = qr.json() or []
-                except Exception:
-                    questions = []
-                job_data[job_id]["questions"] = questions
-                job_data[job_id]["status"] = "completed"
-                update_stats(len(questions), 30, questions)
-                return jsonify({"status": "completed", "questions": questions})
+    if resp.status_code != 200:
+        return jsonify({"error": f"HTTP {resp.status_code}: {resp.text}"}), 500
 
-            # Completed but we couldn't fetch questions
-            job_data[job_id]["status"] = "completed"
-            job_data[job_id].setdefault("questions", [])
-            return jsonify({"status": "completed", "questions": []})
+    data = resp.json()
+    job_data[job_id].update(data)
+    status = (data.get("status") or "").lower()
 
-        if status == "failed":
+    print(f"[POLL] status={status}")
+
+    if status == "completed":
+        if "questions" in data and data["questions"] is not None:
+            qs = data["questions"]
+            update_stats(len(qs), 30.0, qs)
             return jsonify(data)
-
-        # Else still processing
-        # Guardrail: mark timeout after 10 minutes
-        try:
-            started = job_data[job_id].get("timestamp")
-            if started:
-                start_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
-                if datetime.now() - start_dt > timedelta(minutes=10):
-                    job_data[job_id]["status"] = "timeout"
-                    return jsonify({"status": "timeout", "error": "AI processing timeout"})
-        except Exception:
-            pass
-
-        return jsonify({"status": "processing"})
-
-    # 404: some backends delete completed jobs; try to fetch questions anyway
-    if r is not None and r.status_code == 404:
-        qr = make_api_request("GET", f"jobs/{job_id}/questions")
-        if qr is not None and qr.status_code == 200:
-            try:
-                questions = qr.json() or []
-            except Exception:
-                questions = []
-            job_data[job_id] = {"status": "completed", "questions": questions, "timestamp": datetime.now().isoformat()}
-            update_stats(len(questions), 30, questions)
+        # Fallback: fetch questions endpoint
+        q = make_api_request("GET", f"jobs/{job_id}/questions")
+        if q and q.status_code == 200:
+            questions = q.json()
+            job_data[job_id]["questions"] = questions
+            update_stats(len(questions), 30.0, questions)
             return jsonify({"status": "completed", "questions": questions})
         return jsonify({"status": "completed", "questions": []})
 
-    err = f"Failed to poll job {job_id}"
-    if r is not None:
-        err = f"HTTP {r.status_code}: {r.text}"
-    return jsonify({"error": err}), 502
+    if status == "failed":
+        return jsonify(data)
+
+    # Handle long-running timeouts (10 minutes guard)
+    try:
+        started = job_data[job_id].get("timestamp")
+        if started:
+            dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+            if datetime.now() - dt > timedelta(minutes=10):
+                job_data[job_id]["status"] = "timeout"
+                return jsonify({"status": "timeout", "error": "Processing timeout"})
+    except Exception:
+        pass
+
+    return jsonify({"status": "processing"})
 
 
 @app.route("/api/job/<job_id>/questions")
-def get_job_questions(job_id: str):
-    cached = job_data.get(job_id, {})
-    if cached.get("status") == "completed" and "questions" in cached:
-        return jsonify(cached["questions"])
+def get_job_questions(job_id):
+    if job_id not in job_data:
+        return jsonify({"error": "Job not found"}), 404
 
-    r = make_api_request("GET", f"jobs/{job_id}/questions")
-    if r is not None and r.status_code == 200:
-        try:
-            questions = r.json() or []
-        except Exception:
-            questions = []
-        job_data.setdefault(job_id, {})["questions"] = questions
-        job_data[job_id]["status"] = "completed"
+    if job_data[job_id].get("status") == "completed" and "questions" in job_data[job_id]:
+        return jsonify(job_data[job_id]["questions"])
+
+    q = make_api_request("GET", f"jobs/{job_id}/questions")
+    if q and q.status_code == 200:
+        questions = q.json()
+        job_data[job_id]["questions"] = questions
         return jsonify(questions)
-    return jsonify({"error": "Failed to fetch questions"}), 502
+
+    return jsonify({"error": "Failed to fetch questions"}), 500
 
 
 @app.route("/review/<job_id>")
-def review(job_id: str):
-    job = job_data.get(job_id, {"status": "processing", "questions": []})
+def review(job_id):
+    if job_id not in job_data:
+        return redirect(url_for("index"))
 
-    # If no cached questions, attempt remote fetch so page isn't empty on refresh
-    if not job.get("questions"):
-        r = make_api_request("GET", f"jobs/{job_id}/questions")
-        if r is not None and r.status_code == 200:
-            try:
-                job["questions"] = r.json() or []
-            except Exception:
-                job["questions"] = []
-            job["status"] = "completed"
-            job_data[job_id] = job
+    job = job_data[job_id]
+    questions = job.get("questions", [])
 
-    # Apply local edits overlay if any
-    if job_id in job_edits and job.get("questions"):
-        edits_by_qid = {q.get("qid"): q for q in job_edits[job_id]}
+    # If missing, try fetch
+    if not questions:
+        q = make_api_request("GET", f"jobs/{job_id}/questions")
+        if q and q.status_code == 200:
+            questions = q.json()
+            job["questions"] = questions
+
+    # Apply edits overlay if present
+    if job_id in job_edits and job_edits[job_id]:
+        # build dict by qid for override
+        ed = {q.get("qid"): q for q in job_edits[job_id]}
         merged = []
-        for q in job["questions"]:
-            qid = q.get("qid")
-            merged.append(edits_by_qid.get(qid, q))
-        job["questions"] = merged
+        for orig in questions:
+            qid = orig.get("qid")
+            merged.append(ed.get(qid, orig))
+        questions = merged
 
-    return render_template("review.html", job_id=job_id, questions=job.get("questions", []), job=job)
+    return render_template("review.html", job_id=job_id, questions=questions, job=job)
 
 
 @app.route("/api/save_edits/<job_id>", methods=["POST"])
-def save_edits(job_id: str):
-    data = request.get_json(silent=True) or {}
-    incoming = data.get("questions", [])
+def save_edits(job_id):
+    payload = request.get_json(silent=True) or {}
+    items = payload.get("questions", [])
+    if not items:
+        return jsonify({"success": True})  # nothing to save, but not an error
 
-    job_edits.setdefault(job_id, [])
-    index_by_qid = {q.get("qid"): i for i, q in enumerate(job_edits[job_id])}
+    if job_id not in job_edits:
+        job_edits[job_id] = []
 
-    for q in incoming:
+    # index current edits by qid
+    idx = {q.get("qid"): i for i, q in enumerate(job_edits[job_id])}
+    for q in items:
         qid = q.get("qid")
-        if qid in index_by_qid:
-            job_edits[job_id][index_by_qid[qid]] = q
+        if qid in idx:
+            job_edits[job_id][idx[qid]] = q
         else:
             job_edits[job_id].append(q)
 
-    print(f"DEBUG edits: job={job_id} total_saved={len(job_edits[job_id])}")
     return jsonify({"success": True})
 
 
 @app.route("/api/export/<job_id>/<fmt>")
-def export_data(job_id: str, fmt: str):
-    """
-    Export merged (original + edits) questions to DOCX or XLSX.
-    Supports optional filters via query params:
-      - approved=true
-      - high_confidence=true (>= 0.8)
-    """
-    job = job_data.get(job_id)
-    if not job:
+def export_data(job_id, fmt):
+    if job_id not in job_data:
         return jsonify({"error": "Job not found"}), 404
 
-    # Merge originals with edits
-    originals = job.get("questions", [])
-    edited = job_edits.get(job_id, [])
-    edited_by_qid = {q.get("qid"): q for q in edited}
-    merged: list[dict] = [edited_by_qid.get(q.get("qid"), q) for q in originals]
+    original = job_data[job_id].get("questions", [])
+    edits = job_edits.get(job_id, [])
+    ed = {q.get("qid"): q for q in edits}
+    questions = [ed.get(q.get("qid"), q) for q in original]
 
-    # Filters
-    approved_only = request.args.get("approved", "false").lower() == "true"
-    high_conf_only = request.args.get("high_confidence", "false").lower() == "true"
+    # Optional filters via query params
+    approved_only = str(request.args.get("approved", "false")).lower() in ("true", "1", "yes", "y")
+    high_conf_only = str(request.args.get("high_confidence", "false")).lower() in ("true", "1", "yes", "y")
 
-    def keep(q: dict) -> bool:
-        if approved_only and q.get("status") != "approved":
-            return False
-        if high_conf_only:
+    if approved_only:
+        questions = [q for q in questions if (q.get("status") or "").lower() == "approved"]
+    if high_conf_only:
+        def _ok(v):
             try:
-                if float(q.get("confidence", 0)) < 0.8:
-                    return False
+                return float(v) >= 0.8
             except Exception:
                 return False
-        return True
+        questions = [q for q in questions if _ok(q.get("confidence"))]
 
-    filtered = [q for q in merged if keep(q)]
-
+    # DOCX
     if fmt.lower() == "docx":
         try:
             from docx import Document
-
             doc = Document()
             doc.add_heading("RFP Questions Report", 0)
-            doc.add_paragraph(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            doc.add_paragraph(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             doc.add_paragraph(f"Job ID: {job_id}")
-            doc.add_paragraph(f"Total Questions: {len(filtered)}")
+            doc.add_paragraph(f"Total Questions: {len(questions)}")
             doc.add_paragraph("")
 
-            for i, q in enumerate(filtered, 1):
+            for i, q in enumerate(questions, 1):
                 doc.add_heading(f"Question {i}", level=2)
                 doc.add_paragraph(f"Text: {q.get('text', 'N/A')}")
                 doc.add_paragraph(f"Confidence: {q.get('confidence', 'N/A')}")
                 doc.add_paragraph(f"Type: {q.get('type', 'N/A')}")
-                # section can be string or list
-                section = q.get("section_path")
-                if isinstance(section, list):
-                    section = section[0] if section else None
-                doc.add_paragraph(f"Section: {section or 'N/A'}")
+                section = (q.get("section_path") or ["N/A"])
+                doc.add_paragraph(f"Section: {section[0] if section else 'N/A'}")
                 doc.add_paragraph("")
 
             bio = io.BytesIO()
@@ -590,14 +505,14 @@ def export_data(job_id: str, fmt: str):
         except Exception as e:
             return jsonify({"error": f"DOCX export failed: {e}"}), 500
 
+    # XLSX
     if fmt.lower() == "xlsx":
         try:
             import pandas as pd
-
-            df = pd.DataFrame(filtered or [])
+            df = pd.DataFrame(questions)
             bio = io.BytesIO()
             with pd.ExcelWriter(bio, engine="openpyxl") as w:
-                df.to_excel(w, sheet_name="RFP Questions", index=False)
+                df.to_excel(w, index=False, sheet_name="RFP Questions")
             bio.seek(0)
             fname = f"RFP_Questions_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             return send_file(
@@ -612,17 +527,16 @@ def export_data(job_id: str, fmt: str):
     return jsonify({"error": "Invalid format"}), 400
 
 
-# ------------------------------------------------------------------------------
-# Small Health Endpoint (useful on Connect)
-# ------------------------------------------------------------------------------
+# Simple health route (handy for Connect)
 @app.route("/healthz")
 def healthz():
-    return jsonify({"ok": True, "ts": datetime.now().isoformat()}), 200
+    return jsonify({"ok": True, "time": datetime.now().isoformat()})
 
 
-# ------------------------------------------------------------------------------
-# Dev server
-# ------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------------
+# WSGI entrypoint
+# --------------------------------------------------------------------------------------
+# In Posit Connect, set Entrypoint to:  app_simple:app
 if __name__ == "__main__":
-    print("Starting KnockKnock Intelligence (Flask) on http://localhost:5002")
-    app.run(host="0.0.0.0", port=5002, debug=True)
+    print("[BOOT] Effective API config:", {**api_config, "api_key": "••••••••" if api_config.get("api_key") else ""})
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5002")), debug=True)
