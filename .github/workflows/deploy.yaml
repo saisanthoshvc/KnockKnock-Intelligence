@@ -2,11 +2,12 @@ name: Deploy to Posit Connect
 
 on:
   push:
-    branches: [ "main" ]  # change to your default branch if not main
+    branches: [ "main" ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
@@ -19,12 +20,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install rsconnect-python
+          # Create/refresh a manifest for Flask so Connect knows how to run it
           rsconnect write-manifest flask .
 
-      - name: Deploy to Posit Connect
+      - name: Deploy to Posit Connect (no nickname; pass server+key explicitly)
         env:
           CONNECT_SERVER: ${{ secrets.CONNECT_SERVER }}
           CONNECT_API_KEY: ${{ secrets.CONNECT_API_KEY }}
         run: |
-          rsconnect add --server "$CONNECT_SERVER" --api-key "$CONNECT_API_KEY" --name pc
-          rsconnect deploy flask . -n pc --title "KnockKnock Intelligence" --entrypoint app_simple:app -v
+          rsconnect deploy flask . \
+            --server "$CONNECT_SERVER" \
+            --api-key "$CONNECT_API_KEY" \
+            --title "KnockKnock Intelligence" \
+            --entrypoint app_simple:app \
+            -v
