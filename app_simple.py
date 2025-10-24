@@ -11,6 +11,8 @@ from flask import (
     url_for, send_file
 )
 from werkzeug.utils import secure_filename
+from dotenv import load_dotenv
+load_dotenv()
 
 # ------------------------------------------------------------------------------
 # Flask App
