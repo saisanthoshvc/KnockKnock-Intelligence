@@ -123,7 +123,10 @@ def make_api_request(method, endpoint, **kwargs):
     """Make API request with current configuration"""
     url = f"{api_config['base_url'].rstrip('/')}/{endpoint.lstrip('/')}"
     headers = get_auth_header()
-    headers.update(kwargs.get('headers', {}))
+    
+    # Don't set Content-Type for file uploads - let requests handle it
+    if 'files' not in kwargs:
+        headers.update(kwargs.get('headers', {}))
     
     try:
         if method.upper() == 'GET':
@@ -135,6 +138,7 @@ def make_api_request(method, endpoint, **kwargs):
         
         return response
     except requests.exceptions.RequestException as e:
+        print(f"DEBUG: Request exception: {e}")
         return None
 
 @app.route('/')
@@ -171,14 +175,16 @@ def upload_file():
     
     try:
         with open(filepath, 'rb') as f:
-            files = {'file': f}
+            # Properly format the file for multipart upload
+            files = {'file': (filename, f, 'application/octet-stream')}
             data = {
-                'use_llm': use_llm,
+                'use_llm': str(use_llm).lower(),
                 'mode': mode
             }
             
             endpoint = 'extract/sync' if use_sync else 'extract/'
             print(f"DEBUG: Making API request to {endpoint} with data: {data}")
+            print(f"DEBUG: File info - name: {filename}, size: {os.path.getsize(filepath)} bytes")
             response = make_api_request('POST', endpoint, files=files, data=data)
         
         print(f"DEBUG: API response status: {response.status_code if response else 'None'}")
