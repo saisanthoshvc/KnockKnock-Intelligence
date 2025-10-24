@@ -2,44 +2,49 @@ name: Deploy to Posit Connect
 
 on:
   push:
-    branches: [ main ]
-  workflow_dispatch: {}
+    branches: [ "main" ]        # change if your default branch is not main
+  workflow_dispatch:             # allow manual runs from the Actions tab
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
 
-      - name: Install dependencies
+      - name: Install deps + rsconnect and write manifest
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install rsconnect-python
+          # Create/refresh a manifest for Flask so Connect knows how to run it
+          rsconnect write-manifest flask .
 
-      - name: Add Connect server
+      # If your Connect uses a private corporate CA and the runner can't verify TLS,
+      # uncomment this step and add a secret CONNECT_CA_PEM_B64 with a base64 PEM.
+      # - name: Install corporate CA bundle (optional)
+      #   if: secrets.CONNECT_CA_PEM_B64 != ''
+      #   run: |
+      #     echo "${{ secrets.CONNECT_CA_PEM_B64 }}" | base64 -d > corp-root.pem
+      #     echo "REQUESTS_CA_BUNDLE=$PWD/corp-root.pem" >> $GITHUB_ENV
+      #     echo "SSL_CERT_FILE=$PWD/corp-root.pem" >> $GITHUB_ENV
+
+      - name: Deploy Flask app to Posit Connect
         env:
           CONNECT_SERVER: ${{ secrets.CONNECT_SERVER }}
           CONNECT_API_KEY: ${{ secrets.CONNECT_API_KEY }}
         run: |
-          rsconnect add --server "$CONNECT_SERVER" --api-key "$CONNECT_API_KEY" --name pc
-
-      - name: Deploy Flask app
-        env:
-          RFP_API_URL: ${{ secrets.RFP_API_URL }}
-          RFP_API_KEY: ${{ secrets.RFP_API_KEY }}
-          RFP_API_KEY_HEADER_NAME: ${{ secrets.RFP_API_KEY_HEADER_NAME }}
-          RFP_API_AUTH_SCHEME: ${{ secrets.RFP_API_AUTH_SCHEME }}
-          FLASK_SECRET: ${{ secrets.FLASK_SECRET }}
-        run: |
+          # Deploy directly by passing server + key (no nickname to avoid conflicts)
           rsconnect deploy flask . \
-            --server pc \
-            --entrypoint app_simple:app \
+            --server "$CONNECT_SERVER" \
+            --api-key "$CONNECT_API_KEY" \
             --title "KnockKnock Intelligence" \
-            --env RFP_API_URL="${RFP_API_URL}",RFP_API_KEY="${RFP_API_KEY}",RFP_API_KEY_HEADER_NAME="${RFP_API_KEY_HEADER_NAME}",RFP_API_AUTH_SCHEME="${RFP_API_AUTH_SCHEME}",FLASK_SECRET="${FLASK_SECRET}",POLL_INTERVAL_SECONDS=2,POLL_TIMEOUT_SECONDS=240,REQUEST_TIMEOUT_SECONDS=60
+            --entrypoint app_simple:app \
+            -v
