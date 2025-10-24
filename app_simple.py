@@ -176,15 +176,27 @@ def upload_file():
     try:
         with open(filepath, 'rb') as f:
             # Properly format the file for multipart upload
-            files = {'file': (filename, f, 'application/octet-stream')}
+            # Try different MIME types based on file extension
+            file_ext = filename.lower().split('.')[-1]
+            mime_type = 'application/octet-stream'
+            if file_ext == 'docx':
+                mime_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            elif file_ext == 'pdf':
+                mime_type = 'application/pdf'
+            elif file_ext == 'xlsx':
+                mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            
+            files = {'file': (filename, f, mime_type)}
             data = {
                 'use_llm': str(use_llm).lower(),
                 'mode': mode
             }
             
-            endpoint = 'extract/sync' if use_sync else 'extract/'
+            endpoint = 'extract/sync' if use_sync else 'extract'
             print(f"DEBUG: Making API request to {endpoint} with data: {data}")
             print(f"DEBUG: File info - name: {filename}, size: {os.path.getsize(filepath)} bytes")
+            print(f"DEBUG: Files dict: {files}")
+            print(f"DEBUG: Full URL will be: {api_config['base_url'].rstrip('/')}/{endpoint.lstrip('/')}")
             response = make_api_request('POST', endpoint, files=files, data=data)
         
         print(f"DEBUG: API response status: {response.status_code if response else 'None'}")
