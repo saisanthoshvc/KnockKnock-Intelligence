@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Error {{ error_code }} - Cluely{% endblock %}
+{% block title %}Error {{ error_code }} - KnockKnock{% endblock %}
 
 {% block content %}
 <div class="error-container">
@@ -24,40 +24,11 @@
 
 {% block extra_css %}
 <style>
-    .error-container {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        min-height: 60vh;
-    }
-
-    .error-content {
-        padding: 48px 0;
-    }
-
-    .error-icon {
-        font-size: 64px;
-        color: var(--error);
-        margin-bottom: 24px;
-    }
-
-    .error-title {
-        font-size: 48px;
-        font-weight: 800;
-        color: var(--text-primary);
-        margin-bottom: 16px;
-    }
-
-    .error-message {
-        font-size: 18px;
-        color: var(--text-secondary);
-        margin-bottom: 32px;
-    }
-
-    .error-actions {
-        display: flex;
-        justify-content: center;
-        gap: 16px;
-    }
+    .error-container { display: flex; align-items: center; justify-content: center; min-height: 60vh; }
+    .error-content { padding: 48px 0; }
+    .error-icon { font-size: 64px; color: var(--error); margin-bottom: 24px; }
+    .error-title { font-size: 48px; font-weight: 800; color: var(--text-primary); margin-bottom: 16px; }
+    .error-message { font-size: 18px; color: var(--text-secondary); margin-bottom: 32px; }
+    .error-actions { display: flex; justify-content: center; gap: 16px; }
 </style>
 {% endblock %}
