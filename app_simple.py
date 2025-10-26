@@ -1,4 +1,3 @@
-# app_simple.py
 import os
 import io
 import json
@@ -12,17 +11,12 @@ from flask import (
     url_for, send_file
 )
 from werkzeug.utils import secure_filename
-from werkzeug.middleware.proxy_fix import ProxyFix
 
 # ============================== Flask Setup ==============================
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-me")
 
-# Make reverse-proxy headers from Posit Connect respected (script_root, scheme, etc.)
-app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1, x_prefix=1)
-
-# On Posit Connect, writing under /tmp is always safe
-UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "/tmp/uploads")
+UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "uploads")
 ALLOWED_EXTENSIONS = {"docx", "pdf", "xlsx"}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
@@ -30,18 +24,25 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB
 
 # ============================ API Configuration ===========================
 def _env_float(name: str, default: float) -> float:
-    v = os.getenv(name, "").strip()
+    v = (os.getenv(name) or "").strip()
     try:
         return float(v) if v else default
     except Exception:
         return default
 
+# IMPORTANT: This must point to the extractor content URL (NO endpoint suffix)
+# Example: https://connect.affiniusaiplatform.com/content/<extractor-guid>
 API_BASE_URL = (os.getenv(
     "RFP_API_URL",
-    "https://connect.affiniusaiplatform.com/content/000d3572-937a-4d5c-ab7e-7ec80d80c4ce/"
+    "https://connect.affiniusaiplatform.com/content/000d3572-937a-4d5c-ab7e-7ec80d80c4ce"
 ).strip().rstrip("/"))
 
-API_KEY = os.getenv("RFP_API_KEY", "").strip()
+# IMPORTANT: This must be a *Content API Key* created on the extractor content (NOT profile key)
+API_KEY = (os.getenv("RFP_API_KEY") or "").strip()
+
+# Optional: force a particular header scheme; otherwise we try several
+# Allowed values: key, bearer, x-api-key, raw, knocknock
+FORCE_AUTH_SCHEME = (os.getenv("RFP_API_AUTH_SCHEME") or "").strip().lower()
 
 POLL_INTERVAL = _env_float("POLL_INTERVAL_SECONDS", 2.0)
 POLL_TIMEOUT = _env_float("POLL_TIMEOUT_SECONDS", 240.0)
@@ -51,8 +52,8 @@ REQUEST_TIMEOUT = _env_float("REQUEST_TIMEOUT_SECONDS", 60.0)
 job_data: Dict[str, dict] = {}
 job_edits: Dict[str, List[dict]] = {}
 
-# Stats – write somewhere safe
-STATS_FILE = os.getenv("STATS_FILE", "/tmp/stats.json")
+# Stats
+STATS_FILE = os.getenv("STATS_FILE", "stats.json")
 
 
 # ============================== Utilities ==============================
@@ -105,7 +106,7 @@ def update_stats(questions: List[dict], processing_time_sec: float) -> dict:
     vals = []
     for q in questions or []:
         try:
-            c = q.get("confidence", None)
+            c = q.get("confidence")
             if c is not None:
                 vals.append(float(c))
         except Exception:
@@ -122,19 +123,38 @@ def _mime_for(filename: str) -> str:
         "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }.get(ext, "application/octet-stream")
 
+def _join(base: str, path: str) -> str:
+    return f"{base.rstrip('/')}/{path.lstrip('/')}"
+
 def _ep(path: str) -> str:
-    return f"{API_BASE_URL}/{path.lstrip('/')}"
+    # Your extractor exposes endpoints like /extract, /extract/sync, /jobs/<id>, etc.
+    return _join(API_BASE_URL, path)
 
 # ===================== Auth Probing & Request Layer ======================
-AUTH_CANDIDATES = [
-    lambda key: {"Authorization": f"Key {key}"},
-    lambda key: {"Authorization": f"Bearer {key}"},
-    lambda key: {"knocknock-authentication": key},
-    lambda key: {"X-API-Key": key},
-    lambda key: {"Authorization": key},  # raw
-]
+def _candidate_headers(key: str) -> List[dict]:
+    """Return header variants in the right order for Posit Connect."""
+    if FORCE_AUTH_SCHEME == "key":
+        return [{"Authorization": f"Key {key}"}]
+    if FORCE_AUTH_SCHEME == "bearer":
+        return [{"Authorization": f"Bearer {key}"}]
+    if FORCE_AUTH_SCHEME == "x-api-key":
+        return [{"X-API-Key": key}]
+    if FORCE_AUTH_SCHEME == "raw":
+        return [{"Authorization": key}]
+    if FORCE_AUTH_SCHEME == "knocknock":
+        return [{"knocknock-authentication": key}]
 
-EXTRACT_PATHS = ["extract/", "extract"]
+    # Default: try the most likely one first for Connect content API keys.
+    return [
+        {"Authorization": f"Key {key}"},
+        {"Authorization": f"Bearer {key}"},
+        {"X-API-Key": key},
+        {"knocknock-authentication": key},
+        {"Authorization": key},
+    ]
+
+# Some servers are picky about trailing slashes for POST.
+EXTRACT_PATHS = ["extract", "extract/"]
 
 def api_post_with_fallbacks(files, data, want_sync: bool) -> Tuple[Optional[requests.Response], dict, str]:
     """
@@ -142,33 +162,45 @@ def api_post_with_fallbacks(files, data, want_sync: bool) -> Tuple[Optional[requ
     Returns: (response, used_headers, used_path)
     """
     if not API_KEY:
-        raise RuntimeError("Missing RFP_API_KEY env var.")
+        raise RuntimeError("Missing RFP_API_KEY env var (must be a *Content* API Key for the extractor).")
 
     paths = ["extract/sync"] if want_sync else EXTRACT_PATHS
-    last_error = None
+    last_resp = None
+    last_err_text = None
     for path in paths:
         url = _ep(path)
-        for build in AUTH_CANDIDATES:
-            hdrs = build(API_KEY)
+        for hdrs in _candidate_headers(API_KEY):
             try:
                 r = requests.post(url, headers=hdrs, files=files, data=data, timeout=REQUEST_TIMEOUT)
-                print(f"[POST] {url} -> {r.status_code} using {list(hdrs.keys())[0]}:{hdrs[list(hdrs.keys())[0]][:8]}…")
+                # Log a short trace line
+                hname = list(hdrs.keys())[0]
+                print(f"[POST] {url} -> {r.status_code} using {hname}")
+                # Happy path
                 if r.status_code == 200:
                     return r, hdrs, path
+                # If auth wrong, try next header
                 if r.status_code in (401, 403):
-                    last_error = (r.status_code, r.text[:500])
+                    last_resp = r
+                    last_err_text = r.text
                     continue
-                if r.status_code in (400, 422) and "pattern" in (r.text or "").lower():
-                    last_error = (r.status_code, r.text[:500])
+                # Many gateways (including Connect content) validate header schema and reply 422
+                # with 'string did not match the expected pattern'. Try next header on 422.
+                if r.status_code in (400, 422):
+                    last_resp = r
+                    last_err_text = r.text
                     continue
+                # Other statuses—return for caller to surface
                 return r, hdrs, path
             except requests.RequestException as e:
-                last_error = (None, str(e))
+                last_err_text = str(e)
                 continue
+
+    # If we get here, nothing worked; synthesize a response-like object
     resp = requests.models.Response()
-    resp.status_code = 599
-    resp._content = (f"All auth variants failed. Last error: {last_error}").encode()
-    return resp, {}, paths[-1] if paths else ("extract/sync" if want_sync else "extract/")
+    resp.status_code = 502
+    msg = f"Could not authenticate to extractor. Last response: {getattr(last_resp, 'status_code', 'n/a')} {last_err_text!r}"
+    resp._content = msg.encode()
+    return resp, {}, paths[-1] if paths else ("extract/sync" if want_sync else "extract")
 
 def api_get(path: str, headers: dict) -> requests.Response:
     url = _ep(path)
@@ -179,6 +211,10 @@ def api_delete(path: str, headers: dict) -> requests.Response:
     return requests.delete(url, headers=headers, timeout=REQUEST_TIMEOUT)
 
 # ============================== Routes ===============================
+@app.route("/healthz")
+def healthz():
+    return jsonify({"ok": True})
+
 @app.route("/")
 def index():
     print(f"[CFG] API_BASE_URL={API_BASE_URL}")
@@ -228,22 +264,29 @@ def upload_file():
             return jsonify({"error": "No response from extractor"}), 502
 
         if resp.status_code != 200:
-            return jsonify({"error": f"HTTP {resp.status_code}: {resp.text}"}), 502
+            return jsonify({"error": f"{resp.status_code}: {resp.text}"}), 502
 
-        result = resp.json() if "application/json" in (resp.headers.get("content-type","").lower()) else {}
-        # SYNC
+        result = {}
+        ct = (resp.headers.get("content-type", "") or "").lower()
+        if "application/json" in ct:
+            try:
+                result = resp.json()
+            except Exception:
+                pass
+
+        # SYNC: returns questions directly
         if use_sync and isinstance(result, dict) and "questions" in result:
             job_id = f"sync_{int(time.time())}"
             job_data[job_id] = {
                 "status": "completed",
                 "questions": result.get("questions") or [],
                 "timestamp": now_iso(),
-                "auth_headers": used_headers,
+                "auth_headers": used_headers,   # cache the working header
             }
             update_stats(job_data[job_id]["questions"], processing_time_sec=5.0)
             return jsonify({"success": True, "job_id": job_id, "questions": result.get("questions", [])})
 
-        # ASYNC
+        # ASYNC: expect job_id
         job_id = (result or {}).get("job_id")
         if not job_id:
             return jsonify({"error": f"Extractor did not return job_id. Raw: {result}"}), 502
@@ -251,7 +294,7 @@ def upload_file():
         job_data[job_id] = {
             "status": "processing",
             "timestamp": now_iso(),
-            "auth_headers": used_headers,
+            "auth_headers": used_headers,  # cache working header
         }
         return jsonify({"success": True, "job_id": job_id, "async": True})
 
@@ -273,7 +316,7 @@ def poll_job(job_id: str):
     if job.get("status") == "completed":
         return jsonify(job)
 
-    headers = job.get("auth_headers") or AUTH_CANDIDATES[0](API_KEY)
+    headers = job.get("auth_headers") or _candidate_headers(API_KEY)[0]
     try:
         r = api_get(f"jobs/{job_id}", headers)
         print(f"[POLL] GET jobs/{job_id} -> {r.status_code}")
@@ -323,7 +366,7 @@ def get_job_questions(job_id: str):
     if job.get("status") == "completed" and "questions" in job:
         return jsonify(job["questions"])
 
-    headers = job.get("auth_headers") or AUTH_CANDIDATES[0](API_KEY)
+    headers = job.get("auth_headers") or _candidate_headers(API_KEY)[0]
     r = api_get(f"jobs/{job_id}/questions", headers)
     if r.status_code == 200:
         qs = r.json()
@@ -339,7 +382,7 @@ def review(job_id: str):
 
     questions = job.get("questions") or []
     if not questions:
-        headers = job.get("auth_headers") or AUTH_CANDIDATES[0](API_KEY)
+        headers = job.get("auth_headers") or _candidate_headers(API_KEY)[0]
         r = api_get(f"jobs/{job_id}/questions", headers)
         if r.status_code == 200:
             questions = r.json()
