@@ -1,8 +1,10 @@
+<!-- templates/index.html -->
 {% extends "base.html" %}
+
 {% block title %}KnockKnock Intelligence - AI-Powered RFP Extraction{% endblock %}
 
 {% block content %}
-<!-- Hero Section (unchanged UI) -->
+<!-- Hero Section -->
 <div class="hero-section">
     <div class="hero-content">
         <h1 class="hero-title">
@@ -34,7 +36,7 @@
     </div>
 </div>
 
-<!-- Upload Section (unchanged styling) -->
+<!-- Upload Section -->
 <div class="card upload-section">
     <div class="section-header">
         <h2 class="section-title">
@@ -95,16 +97,21 @@
         </div>
     </div>
 
+    <!-- Processing Status -->
     <div class="processing-status" id="processingStatus" style="display: none;">
         <div class="status-content">
-            <div class="status-icon"><div class="loading"></div></div>
+            <div class="status-icon">
+                <div class="loading"></div>
+            </div>
             <div class="status-text">
                 <h4 class="status-title">Processing Document</h4>
                 <p class="status-message" id="statusMessage">Analyzing document structure...</p>
             </div>
         </div>
         <div class="progress-container">
-            <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width: 0%"></div></div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+            </div>
             <div class="progress-text">
                 <span id="progressText">0%</span>
                 <span id="elapsedTime">Elapsed: 0s</span>
@@ -113,7 +120,7 @@
     </div>
 </div>
 
-<!-- Technology Section (unchanged) -->
+<!-- Technology Section -->
 <div class="card technology-section">
     <div class="section-header">
         <h2 class="section-title">
@@ -122,24 +129,36 @@
         </h2>
         <p class="section-subtitle">Powered by cutting-edge AI and machine learning</p>
     </div>
+
     <div class="tech-grid">
         <div class="tech-item">
-            <div class="tech-icon"><i class="fas fa-robot"></i></div>
+            <div class="tech-icon">
+                <i class="fas fa-robot"></i>
+            </div>
             <h4 class="tech-title">AI Classification</h4>
             <p class="tech-description">Advanced machine learning models for question categorization</p>
         </div>
+
         <div class="tech-item">
-            <div class="tech-icon"><i class="fas fa-search"></i></div>
+            <div class="tech-icon">
+                <i class="fas fa-search"></i>
+            </div>
             <h4 class="tech-title">Smart Extraction</h4>
             <p class="tech-description">Intelligent pattern recognition for accurate question detection</p>
         </div>
+
         <div class="tech-item">
-            <div class="tech-icon"><i class="fas fa-shield-alt"></i></div>
+            <div class="tech-icon">
+                <i class="fas fa-shield-alt"></i>
+            </div>
             <h4 class="tech-title">Secure Processing</h4>
             <p class="tech-description">Enterprise-grade security for your sensitive documents</p>
         </div>
+
         <div class="tech-item">
-            <div class="tech-icon"><i class="fas fa-bolt"></i></div>
+            <div class="tech-icon">
+                <i class="fas fa-bolt"></i>
+            </div>
             <h4 class="tech-title">Lightning Fast</h4>
             <p class="tech-description">Optimized processing for maximum speed and efficiency</p>
         </div>
@@ -147,10 +166,26 @@
 </div>
 
 <style>
-/* (keep your existing CSS exactly as-is) */
+/* (Your original CSS — unchanged) */
+.hero-section { text-align: center; padding: 4rem 0; margin-bottom: 3rem; }
+.hero-content { max-width: 1000px; margin: 0 auto; }
+.hero-title { font-size: 4rem; font-weight: 900; margin-bottom: 1.5rem; line-height: 1.1; }
+.hero-title-line { display: block; animation: slideInUp 0.8s ease-out; }
+.hero-title-line:nth-child(2) { animation-delay: 0.2s; }
+.gradient-text { background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple), var(--accent-teal)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.hero-subtitle { font-size: 1.25rem; color: var(--text-secondary); margin-bottom: 3rem; max-width: 600px; margin-left: auto; margin-right: auto; animation: fadeInUp 0.8s ease-out 0.4s both; }
+.hero-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 2rem; margin-top: 3rem; }
+.stat-item { text-align: center; padding: 1.5rem; background: rgba(255, 255, 255, 0.05); border-radius: 16px; border: 1px solid var(--border); backdrop-filter: blur(10px); transition: all 0.3s ease; animation: fadeInUp 0.8s ease-out; }
+.stat-item:nth-child(1) { animation-delay: 0.6s; } .stat-item:nth-child(2) { animation-delay: 0.7s; } .stat-item:nth-child(3) { animation-delay: 0.8s; } .stat-item:nth-child(4) { animation-delay: 0.9s; }
+.stat-item:hover { transform: translateY(-5px); box-shadow: var(--shadow-lg); border-color: var(--border-hover); }
+.stat-number { font-size: 2.5rem; font-weight: 800; color: var(--accent-blue); margin-bottom: 0.5rem; background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.stat-label { font-size: 0.9rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+/* (rest of your index.css remains identical) */
 </style>
 
 <script>
+const BASE = "{{ request.script_root|default('', true) }}";
+
 document.addEventListener('DOMContentLoaded', function() {
     const uploadArea = document.getElementById('uploadSection');
     const fileInput = document.getElementById('fileInput');
@@ -173,10 +208,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function handleDragOver(e) { e.preventDefault(); uploadArea.classList.add('dragover'); }
     function handleDragLeave(e) { e.preventDefault(); uploadArea.classList.remove('dragover'); }
-    function handleDrop(e) {
-        e.preventDefault(); uploadArea.classList.remove('dragover');
-        const files = e.dataTransfer.files; if (files.length > 0) handleFile(files[0]);
-    }
+    function handleDrop(e) { e.preventDefault(); uploadArea.classList.remove('dragover'); const files = e.dataTransfer.files; if (files.length > 0) handleFile(files[0]); }
     function handleFileSelect(e) { const files = e.target.files; if (files.length > 0) handleFile(files[0]); }
 
     function handleFile(file) {
@@ -193,7 +225,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
     window.parseDocument = function() {
         if (!selectedFile) { alert('Please select a file first'); return; }
-
         const processingMode = document.querySelector('input[name="processingMode"]:checked').value;
         const useLLM = processingMode === 'ai';
         const useSync = processingMode === 'sync';
@@ -209,18 +240,15 @@ document.addEventListener('DOMContentLoaded', function() {
         startTime = Date.now();
         updateElapsedTime();
 
-        fetch(api('api/upload'), { method: 'POST', body: formData })
-        .then(r => r.json())
+        fetch(`${BASE}/api/upload`, { method: 'POST', body: formData })
+        .then(async (response) => {
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.success) throw new Error(data.error || `HTTP ${response.status}`);
+            return data;
+        })
         .then(data => {
-            if (data.success) {
-                if (data.async) {
-                    startPolling(data.job_id);
-                } else {
-                    window.location.href = api(`review/${data.job_id}`);
-                }
-            } else {
-                throw new Error(data.error || 'Upload failed');
-            }
+            if (data.async) startPolling(data.job_id);
+            else window.location.href = `${BASE}/review/${data.job_id}`;
         })
         .catch(error => {
             console.error('Upload error:', error);
@@ -232,14 +260,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function startPolling(jobId) {
         const pollInterval = setInterval(() => {
-            fetch(api(`api/poll/${jobId}`))
-            .then(r => r.json())
+            fetch(`${BASE}/api/poll/${jobId}`)
+            .then(response => response.json())
             .then(data => {
                 updateStatus(data);
                 if (data.status === 'completed') {
                     clearInterval(pollInterval);
                     if (progressInterval) clearInterval(progressInterval);
-                    window.location.href = api(`review/${jobId}`);
+                    window.location.href = `${BASE}/review/${jobId}`;
                 } else if (data.status === 'failed') {
                     clearInterval(pollInterval);
                     if (progressInterval) clearInterval(progressInterval);
@@ -264,7 +292,8 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateStatus(data) {
         if (data.progress && data.progress.message) statusMessage.textContent = data.progress.message;
         let progress = 0;
-        if (data.status === 'processing') progress = 50; else if (data.status === 'completed') progress = 100;
+        if (data.status === 'processing') progress = 50;
+        else if (data.status === 'completed') progress = 100;
         progressFill.style.width = progress + '%';
         progressText.textContent = progress + '%';
     }
@@ -277,8 +306,8 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function refreshStats() {
-        fetch('{{ url_for("index") }}')
-        .then(r => r.text())
+        fetch(`${BASE}/`)
+        .then(response => response.text())
         .then(html => {
             const parser = new DOMParser();
             const doc = parser.parseFromString(html, 'text/html');
@@ -293,7 +322,7 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById('accuracyRate').textContent = newStats.accuracyRate;
             document.getElementById('avgProcessingTime').textContent = newStats.avgProcessingTime;
         })
-        .catch(err => console.error('Error refreshing stats:', err));
+        .catch(error => console.error('Error refreshing stats:', error));
     }
 
     setInterval(refreshStats, 30000);
