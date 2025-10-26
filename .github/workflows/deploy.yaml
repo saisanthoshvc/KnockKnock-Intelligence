@@ -2,8 +2,8 @@ name: Deploy to Posit Connect
 
 on:
   push:
-    branches: [ "main" ]        # change if your default branch is not main
-  workflow_dispatch:             # allow manual runs from the Actions tab
+    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -24,24 +24,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install rsconnect-python
-          # Create/refresh a manifest for Flask so Connect knows how to run it
           rsconnect write-manifest flask .
 
-      # If your Connect uses a private corporate CA and the runner can't verify TLS,
-      # uncomment this step and add a secret CONNECT_CA_PEM_B64 with a base64 PEM.
-      # - name: Install corporate CA bundle (optional)
-      #   if: secrets.CONNECT_CA_PEM_B64 != ''
-      #   run: |
-      #     echo "${{ secrets.CONNECT_CA_PEM_B64 }}" | base64 -d > corp-root.pem
-      #     echo "REQUESTS_CA_BUNDLE=$PWD/corp-root.pem" >> $GITHUB_ENV
-      #     echo "SSL_CERT_FILE=$PWD/corp-root.pem" >> $GITHUB_ENV
+      # Optional corporate CA step here if needed
 
       - name: Deploy Flask app to Posit Connect
         env:
           CONNECT_SERVER: ${{ secrets.CONNECT_SERVER }}
           CONNECT_API_KEY: ${{ secrets.CONNECT_API_KEY }}
         run: |
-          # Deploy directly by passing server + key (no nickname to avoid conflicts)
           rsconnect deploy flask . \
             --server "$CONNECT_SERVER" \
             --api-key "$CONNECT_API_KEY" \
