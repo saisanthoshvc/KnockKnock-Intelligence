@@ -1,3 +1,4 @@
+# app_simple.py
 import os
 import io
 import json
@@ -17,10 +18,11 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-me")
 
-# Make the app path-aware behind Posit Connect's reverse proxy
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+# Make reverse-proxy headers from Posit Connect respected (script_root, scheme, etc.)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1, x_prefix=1)
 
-UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "uploads")
+# On Posit Connect, writing under /tmp is always safe
+UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "/tmp/uploads")
 ALLOWED_EXTENSIONS = {"docx", "pdf", "xlsx"}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
@@ -28,7 +30,7 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB
 
 # ============================ API Configuration ===========================
 def _env_float(name: str, default: float) -> float:
-    v = (os.getenv(name, "") or "").strip()
+    v = os.getenv(name, "").strip()
     try:
         return float(v) if v else default
     except Exception:
@@ -39,7 +41,7 @@ API_BASE_URL = (os.getenv(
     "https://connect.affiniusaiplatform.com/content/000d3572-937a-4d5c-ab7e-7ec80d80c4ce/"
 ).strip().rstrip("/"))
 
-API_KEY = (os.getenv("RFP_API_KEY", "") or "").strip()
+API_KEY = os.getenv("RFP_API_KEY", "").strip()
 
 POLL_INTERVAL = _env_float("POLL_INTERVAL_SECONDS", 2.0)
 POLL_TIMEOUT = _env_float("POLL_TIMEOUT_SECONDS", 240.0)
@@ -49,8 +51,9 @@ REQUEST_TIMEOUT = _env_float("REQUEST_TIMEOUT_SECONDS", 60.0)
 job_data: Dict[str, dict] = {}
 job_edits: Dict[str, List[dict]] = {}
 
-# Stats
-STATS_FILE = os.getenv("STATS_FILE", "stats.json")
+# Stats – write somewhere safe
+STATS_FILE = os.getenv("STATS_FILE", "/tmp/stats.json")
+
 
 # ============================== Utilities ==============================
 def allowed_file(filename: str) -> bool:
@@ -130,6 +133,7 @@ AUTH_CANDIDATES = [
     lambda key: {"X-API-Key": key},
     lambda key: {"Authorization": key},  # raw
 ]
+
 EXTRACT_PATHS = ["extract/", "extract"]
 
 def api_post_with_fallbacks(files, data, want_sync: bool) -> Tuple[Optional[requests.Response], dict, str]:
@@ -175,10 +179,6 @@ def api_delete(path: str, headers: dict) -> requests.Response:
     return requests.delete(url, headers=headers, timeout=REQUEST_TIMEOUT)
 
 # ============================== Routes ===============================
-@app.route("/healthz")
-def healthz():
-    return "ok", 200
-
 @app.route("/")
 def index():
     print(f"[CFG] API_BASE_URL={API_BASE_URL}")
@@ -231,7 +231,7 @@ def upload_file():
             return jsonify({"error": f"HTTP {resp.status_code}: {resp.text}"}), 502
 
         result = resp.json() if "application/json" in (resp.headers.get("content-type","").lower()) else {}
-
+        # SYNC
         if use_sync and isinstance(result, dict) and "questions" in result:
             job_id = f"sync_{int(time.time())}"
             job_data[job_id] = {
@@ -243,6 +243,7 @@ def upload_file():
             update_stats(job_data[job_id]["questions"], processing_time_sec=5.0)
             return jsonify({"success": True, "job_id": job_id, "questions": result.get("questions", [])})
 
+        # ASYNC
         job_id = (result or {}).get("job_id")
         if not job_id:
             return jsonify({"error": f"Extractor did not return job_id. Raw: {result}"}), 502
@@ -363,20 +364,6 @@ def save_edits(job_id: str):
             edits.append(q)
     return jsonify({"success": True})
 
-# Small helper to support the Delete button in the UI
-@app.route("/api/delete_job/<qid>", methods=["DELETE"])
-def delete_job(qid: str):
-    removed = 0
-    for job in job_data.values():
-        if isinstance(job.get("questions"), list):
-            before = len(job["questions"])
-            job["questions"] = [q for q in job["questions"] if str(q.get("qid")) != str(qid)]
-            removed += (before - len(job["questions"]))
-    if job_edits:
-        for jid in list(job_edits):
-            job_edits[jid] = [q for q in job_edits[jid] if str(q.get("qid")) != str(qid)]
-    return jsonify({"success": True, "removed": removed})
-
 @app.route("/api/export/<job_id>/<fmt>")
 def export_data(job_id: str, fmt: str):
     job = job_data.get(job_id)
@@ -387,23 +374,6 @@ def export_data(job_id: str, fmt: str):
     edited = job_edits.get(job_id, [])
     edited_map = {q.get("qid"): q for q in edited if q.get("qid")}
     merged = [edited_map.get(o.get("qid"), o) for o in original]
-
-    # Optional filters used by the UI modal
-    approved_only = (request.args.get("approved", "false").lower() == "true")
-    high_conf_only = (request.args.get("high_confidence", "false").lower() == "true")
-
-    def _passes(q: dict) -> bool:
-        if approved_only and str(q.get("status", "pending")).lower() != "approved":
-            return False
-        if high_conf_only:
-            try:
-                if float(q.get("confidence", 0.0)) < 0.80:
-                    return False
-            except Exception:
-                return False
-        return True
-
-    merged = [q for q in merged if _passes(q)]
 
     if fmt == "docx":
         try:
