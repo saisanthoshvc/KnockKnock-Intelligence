@@ -30,18 +30,16 @@ def _env_float(name: str, default: float) -> float:
     except Exception:
         return default
 
-# IMPORTANT: This must point to the extractor content URL (NO endpoint suffix)
-# Example: https://connect.affiniusaiplatform.com/content/<extractor-guid>
+# IMPORTANT: Must point to the extractor *content* base URL (no endpoint suffix).
 API_BASE_URL = (os.getenv(
     "RFP_API_URL",
     "https://connect.affiniusaiplatform.com/content/000d3572-937a-4d5c-ab7e-7ec80d80c4ce"
 ).strip().rstrip("/"))
 
-# IMPORTANT: This must be a *Content API Key* created on the extractor content (NOT profile key)
+# Key you created (Profile or Content). We'll probe several header schemes.
 API_KEY = (os.getenv("RFP_API_KEY") or "").strip()
 
-# Optional: force a particular header scheme; otherwise we try several
-# Allowed values: key, bearer, x-api-key, raw, knocknock
+# Force a specific auth scheme if you know it: key|bearer|x-api-key|raw|knocknock
 FORCE_AUTH_SCHEME = (os.getenv("RFP_API_AUTH_SCHEME") or "").strip().lower()
 
 POLL_INTERVAL = _env_float("POLL_INTERVAL_SECONDS", 2.0)
@@ -127,12 +125,11 @@ def _join(base: str, path: str) -> str:
     return f"{base.rstrip('/')}/{path.lstrip('/')}"
 
 def _ep(path: str) -> str:
-    # Your extractor exposes endpoints like /extract, /extract/sync, /jobs/<id>, etc.
     return _join(API_BASE_URL, path)
 
 # ===================== Auth Probing & Request Layer ======================
 def _candidate_headers(key: str) -> List[dict]:
-    """Return header variants in the right order for Posit Connect."""
+    """Return header variants in the right order for Posit Connect/content."""
     if FORCE_AUTH_SCHEME == "key":
         return [{"Authorization": f"Key {key}"}]
     if FORCE_AUTH_SCHEME == "bearer":
@@ -144,7 +141,7 @@ def _candidate_headers(key: str) -> List[dict]:
     if FORCE_AUTH_SCHEME == "knocknock":
         return [{"knocknock-authentication": key}]
 
-    # Default: try the most likely one first for Connect content API keys.
+    # Default: try the most common first.
     return [
         {"Authorization": f"Key {key}"},
         {"Authorization": f"Bearer {key}"},
@@ -153,16 +150,12 @@ def _candidate_headers(key: str) -> List[dict]:
         {"Authorization": key},
     ]
 
-# Some servers are picky about trailing slashes for POST.
 EXTRACT_PATHS = ["extract", "extract/"]
 
 def api_post_with_fallbacks(files, data, want_sync: bool) -> Tuple[Optional[requests.Response], dict, str]:
-    """
-    Try several header variants and both extract URL forms.
-    Returns: (response, used_headers, used_path)
-    """
+    """Try several header variants and both extract URL forms."""
     if not API_KEY:
-        raise RuntimeError("Missing RFP_API_KEY env var (must be a *Content* API Key for the extractor).")
+        raise RuntimeError("Missing RFP_API_KEY (any valid key).")
 
     paths = ["extract/sync"] if want_sync else EXTRACT_PATHS
     last_resp = None
@@ -172,43 +165,81 @@ def api_post_with_fallbacks(files, data, want_sync: bool) -> Tuple[Optional[requ
         for hdrs in _candidate_headers(API_KEY):
             try:
                 r = requests.post(url, headers=hdrs, files=files, data=data, timeout=REQUEST_TIMEOUT)
-                # Log a short trace line
                 hname = list(hdrs.keys())[0]
                 print(f"[POST] {url} -> {r.status_code} using {hname}")
-                # Happy path
-                if r.status_code == 200:
+                if r.status_code in (200, 201, 202):
                     return r, hdrs, path
-                # If auth wrong, try next header
-                if r.status_code in (401, 403):
+                if r.status_code in (401, 403, 400, 422):
                     last_resp = r
                     last_err_text = r.text
                     continue
-                # Many gateways (including Connect content) validate header schema and reply 422
-                # with 'string did not match the expected pattern'. Try next header on 422.
-                if r.status_code in (400, 422):
-                    last_resp = r
-                    last_err_text = r.text
-                    continue
-                # Other statuses—return for caller to surface
                 return r, hdrs, path
             except requests.RequestException as e:
                 last_err_text = str(e)
                 continue
 
-    # If we get here, nothing worked; synthesize a response-like object
     resp = requests.models.Response()
     resp.status_code = 502
     msg = f"Could not authenticate to extractor. Last response: {getattr(last_resp, 'status_code', 'n/a')} {last_err_text!r}"
     resp._content = msg.encode()
     return resp, {}, paths[-1] if paths else ("extract/sync" if want_sync else "extract")
 
-def api_get(path: str, headers: dict) -> requests.Response:
+def api_get_with_fallbacks(path: str, preferred_headers: Optional[dict]) -> Tuple[requests.Response, dict]:
+    """GET that tries the working POST headers first, then falls back over schemes."""
     url = _ep(path)
-    return requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+    header_trials = []
+    if preferred_headers:
+        header_trials.append(preferred_headers)
+    header_trials.extend([h for h in _candidate_headers(API_KEY) if h not in header_trials])
 
-def api_delete(path: str, headers: dict) -> requests.Response:
+    last = None
+    for hdrs in header_trials:
+        try:
+            r = requests.get(url, headers=hdrs, timeout=REQUEST_TIMEOUT)
+            hname = list(hdrs.keys())[0]
+            print(f"[GET ] {url} -> {r.status_code} using {hname}")
+            if r.status_code in (200, 201):
+                return r, hdrs
+            if r.status_code in (401, 403, 400, 422):
+                last = r
+                continue
+            # other status—return to caller
+            return r, hdrs
+        except requests.RequestException as e:
+            print(f"[GET ] {url} exception: {e}")
+            continue
+    # If nothing worked, synthesize an error Response
+    resp = requests.models.Response()
+    resp.status_code = getattr(last, "status_code", 502)
+    resp._content = (getattr(last, "text", "") or "GET failed for all auth schemes").encode()
+    return resp, (preferred_headers or {})
+
+def api_delete_with_fallbacks(path: str, preferred_headers: Optional[dict]) -> Tuple[requests.Response, dict]:
     url = _ep(path)
-    return requests.delete(url, headers=headers, timeout=REQUEST_TIMEOUT)
+    header_trials = []
+    if preferred_headers:
+        header_trials.append(preferred_headers)
+    header_trials.extend([h for h in _candidate_headers(API_KEY) if h not in header_trials])
+
+    last = None
+    for hdrs in header_trials:
+        try:
+            r = requests.delete(url, headers=hdrs, timeout=REQUEST_TIMEOUT)
+            hname = list(hdrs.keys())[0]
+            print(f"[DEL ] {url} -> {r.status_code} using {hname}")
+            if r.status_code in (200, 204):
+                return r, hdrs
+            if r.status_code in (401, 403, 400, 422):
+                last = r
+                continue
+            return r, hdrs
+        except requests.RequestException as e:
+            print(f"[DEL ] {url} exception: {e}")
+            continue
+    resp = requests.models.Response()
+    resp.status_code = getattr(last, "status_code", 502)
+    resp._content = (getattr(last, "text", "") or "DELETE failed for all auth schemes").encode()
+    return resp, (preferred_headers or {})
 
 # ============================== Routes ===============================
 @app.route("/healthz")
@@ -263,12 +294,13 @@ def upload_file():
         if resp is None:
             return jsonify({"error": "No response from extractor"}), 502
 
-        if resp.status_code != 200:
+        if resp.status_code not in (200, 201, 202):
             return jsonify({"error": f"{resp.status_code}: {resp.text}"}), 502
 
+        # Parse JSON if present
         result = {}
         ct = (resp.headers.get("content-type", "") or "").lower()
-        if "application/json" in ct:
+        if "application/json" in ct or resp.text.strip().startswith("{"):
             try:
                 result = resp.json()
             except Exception:
@@ -294,7 +326,7 @@ def upload_file():
         job_data[job_id] = {
             "status": "processing",
             "timestamp": now_iso(),
-            "auth_headers": used_headers,  # cache working header
+            "auth_headers": used_headers,  # cache working header from POST
         }
         return jsonify({"success": True, "job_id": job_id, "async": True})
 
@@ -316,20 +348,20 @@ def poll_job(job_id: str):
     if job.get("status") == "completed":
         return jsonify(job)
 
-    headers = job.get("auth_headers") or _candidate_headers(API_KEY)[0]
+    preferred_headers = job.get("auth_headers")
     try:
-        r = api_get(f"jobs/{job_id}", headers)
-        print(f"[POLL] GET jobs/{job_id} -> {r.status_code}")
+        r, working_headers = api_get_with_fallbacks(f"jobs/{job_id}", preferred_headers)
         if r.status_code == 200:
             payload = r.json()
             job.update(payload or {})
+            job["auth_headers"] = working_headers  # persist whichever worked
             state = (payload or {}).get("status", "").lower()
 
             if state == "completed":
                 if "questions" in payload and payload["questions"] is not None:
                     update_stats(payload["questions"], processing_time_sec=30.0)
                     return jsonify(payload)
-                rq = api_get(f"jobs/{job_id}/questions", headers)
+                rq, working_headers = api_get_with_fallbacks(f"jobs/{job_id}/questions", working_headers)
                 if rq.status_code == 200:
                     questions = rq.json()
                     job["questions"] = questions
@@ -340,18 +372,22 @@ def poll_job(job_id: str):
             if state == "failed":
                 return jsonify(payload)
 
-            return jsonify({"status": "processing"})
+            # still processing
+            return jsonify({"status": "processing", "progress": payload.get("progress")})
 
         if r.status_code == 404:
-            rq = api_get(f"jobs/{job_id}/questions", headers)
+            # Some backends surface questions here once done.
+            rq, working_headers = api_get_with_fallbacks(f"jobs/{job_id}/questions", preferred_headers)
             if rq.status_code == 200:
                 questions = rq.json()
                 job["status"] = "completed"
                 job["questions"] = questions
+                job["auth_headers"] = working_headers
                 update_stats(questions, processing_time_sec=30.0)
                 return jsonify({"status": "completed", "questions": questions})
-            return jsonify({"status": "completed", "questions": []})
+            return jsonify({"status": "processing"})
 
+        # Non-2xx: surface a clear error so frontend can stop polling
         return jsonify({"error": f"HTTP {r.status_code}: {r.text}"}), 502
 
     except requests.RequestException as e:
@@ -366,11 +402,12 @@ def get_job_questions(job_id: str):
     if job.get("status") == "completed" and "questions" in job:
         return jsonify(job["questions"])
 
-    headers = job.get("auth_headers") or _candidate_headers(API_KEY)[0]
-    r = api_get(f"jobs/{job_id}/questions", headers)
+    preferred_headers = job.get("auth_headers")
+    r, working_headers = api_get_with_fallbacks(f"jobs/{job_id}/questions", preferred_headers)
     if r.status_code == 200:
         qs = r.json()
         job["questions"] = qs
+        job["auth_headers"] = working_headers
         return jsonify(qs)
     return jsonify({"error": f"HTTP {r.status_code}: {r.text}"}), 502
 
@@ -382,11 +419,12 @@ def review(job_id: str):
 
     questions = job.get("questions") or []
     if not questions:
-        headers = job.get("auth_headers") or _candidate_headers(API_KEY)[0]
-        r = api_get(f"jobs/{job_id}/questions", headers)
+        preferred_headers = job.get("auth_headers")
+        r, working_headers = api_get_with_fallbacks(f"jobs/{job_id}/questions", preferred_headers)
         if r.status_code == 200:
             questions = r.json()
             job["questions"] = questions
+            job["auth_headers"] = working_headers
 
     return render_template("review.html", job_id=job_id, questions=questions, job=job)
 
