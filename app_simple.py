@@ -1,8 +1,8 @@
-# app_simple.py
 import os
 import io
 import json
 import time
+import logging
 from datetime import datetime
 from typing import Dict, Optional, Tuple, List
 
@@ -13,11 +13,22 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+# ============================== Logging ==============================
+LOG_PATH = os.getenv("APP_LOG_FILE", "/tmp/kk_app.log")
+logger = logging.getLogger("kk")
+logger.setLevel(logging.INFO)
+_fmt = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+fh = logging.FileHandler(LOG_PATH)
+fh.setFormatter(_fmt)
+sh = logging.StreamHandler()
+sh.setFormatter(_fmt)
+logger.addHandler(fh)
+logger.addHandler(sh)
+
 # ============================== Flask Setup ==============================
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-me")
 
-# Prefer writable paths on Connect
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "/tmp/kk_uploads")
 ALLOWED_EXTENSIONS = {"docx", "pdf", "xlsx"}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -26,27 +37,29 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB
 
 # ============================ API Configuration ===========================
 def _env_float(name: str, default: float) -> float:
-    v = os.getenv(name, "").strip()
+    v = (os.getenv(name) or "").strip()
     try:
         return float(v) if v else default
     except Exception:
         return default
 
-API_BASE_URL = (
-    os.getenv(
-        "RFP_API_URL",
-        "https://connect.affiniusaiplatform.com/content/000d3572-937a-4d5c-ab7e-7ec80d80c4ce/"
-    ).strip().rstrip("/")
-)
+def _env_str(name: str, default: str = "") -> str:
+    v = os.getenv(name)
+    return v.strip() if v else default
 
-API_KEY = os.getenv("RFP_API_KEY", "").strip()
+API_BASE_URL = _env_str(
+    "RFP_API_URL",
+    "https://connect.affiniusaiplatform.com/content/000d3572-937a-4d5c-ab7e-7ec80d80c4ce/"
+).rstrip("/")
 
-# Explicit, env-driven auth controls (so we stop guessing)
-RFP_API_KEY_HEADER_NAME = os.getenv("RFP_API_KEY_HEADER_NAME", "").strip()  # e.g., "Authorization"
-RFP_API_AUTH_SCHEME     = os.getenv("RFP_API_AUTH_SCHEME", "").strip()      # e.g., "Key", "Bearer", "Raw", or ""
+API_KEY = _env_str("RFP_API_KEY", "")
+
+# Optional env to pin the header we send first; we still try fallbacks if that fails.
+EXPLICIT_AUTH_NAME = _env_str("RFP_API_KEY_HEADER_NAME", "")
+EXPLICIT_AUTH_SCHEME = _env_str("RFP_API_AUTH_SCHEME", "")  # Key | Bearer | Raw | (empty = None)
 
 POLL_INTERVAL = _env_float("POLL_INTERVAL_SECONDS", 2.0)
-POLL_TIMEOUT  = _env_float("POLL_TIMEOUT_SECONDS", 240.0)
+POLL_TIMEOUT = _env_float("POLL_TIMEOUT_SECONDS", 240.0)
 REQUEST_TIMEOUT = _env_float("REQUEST_TIMEOUT_SECONDS", 60.0)
 
 # In-memory job store
@@ -55,6 +68,7 @@ job_edits: Dict[str, List[dict]] = {}
 
 # Stats
 STATS_FILE = os.getenv("STATS_FILE", "/tmp/kk_stats.json")
+
 
 # ============================== Utilities ==============================
 def allowed_file(filename: str) -> bool:
@@ -79,8 +93,8 @@ def load_stats() -> dict:
             tot = stats.get("total_processing_time", 0.0)
             stats["avg_processing_time"] = round(tot / max(docs, 1), 1)
             return stats
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[STATS] load error: {e}")
     return {
         "documents_processed": 0,
         "questions_extracted": 0,
@@ -96,14 +110,13 @@ def save_stats(stats: dict) -> None:
         with open(STATS_FILE, "w") as f:
             json.dump(stats, f, indent=2)
     except Exception as e:
-        print(f"[STATS] Save error: {e}")
+        logger.warning(f"[STATS] Save error: {e}")
 
 def update_stats(questions: List[dict], processing_time_sec: float) -> dict:
     stats = load_stats()
     stats["documents_processed"] += 1
     stats["questions_extracted"] += len(questions)
     stats["total_processing_time"] += float(processing_time_sec)
-    # accuracy from confidence if present
     vals = []
     for q in questions or []:
         try:
@@ -127,78 +140,68 @@ def _mime_for(filename: str) -> str:
 def _ep(path: str) -> str:
     return f"{API_BASE_URL}/{path.lstrip('/')}"
 
-# ===================== Auth Builders & Request Layer ======================
-def build_explicit_auth_header() -> Optional[dict]:
-    """
-    Build exactly what the upstream expects from env settings:
-      - RFP_API_KEY_HEADER_NAME: e.g., 'Authorization' (or 'knocknock-authentication')
-      - RFP_API_AUTH_SCHEME:     e.g., 'Key', 'Bearer', 'Raw', or '' (no scheme)
-      - RFP_API_KEY:             token value
-    """
+# ===================== Auth Candidates & Request Layer ======================
+
+def _explicit_candidate() -> Optional[dict]:
     if not API_KEY:
-        raise RuntimeError("Missing RFP_API_KEY env var.")
-    if not RFP_API_KEY_HEADER_NAME:
         return None
-    if RFP_API_AUTH_SCHEME:
-        return { RFP_API_KEY_HEADER_NAME: f"{RFP_API_AUTH_SCHEME} {API_KEY}" }
-    return { RFP_API_KEY_HEADER_NAME: API_KEY }
+    name = EXPLICIT_AUTH_NAME
+    scheme = EXPLICIT_AUTH_SCHEME
+    if not name:
+        return None
+    if scheme:
+        return {name: f"{scheme} {API_KEY}"}
+    else:
+        return {name: API_KEY}
 
-# Keep your original fallbacks as a safety net
-AUTH_CANDIDATES = [
-    lambda key: {"Authorization": f"Key {key}"},
-    lambda key: {"Authorization": f"Bearer {key}"},
-    lambda key: {"knocknock-authentication": key},
-    lambda key: {"X-API-Key": key},
-    lambda key: {"Authorization": key},  # raw
-]
+def _fallback_candidates() -> List[dict]:
+    if not API_KEY:
+        return []
+    return [
+        {"Authorization": f"Key {API_KEY}"},
+        {"Authorization": f"Bearer {API_KEY}"},
+        {"knocknock-authentication": f"Raw {API_KEY}"},
+        {"X-API-Key": API_KEY},
+        {"Authorization": API_KEY},
+    ]
 
-# Some servers are picky about trailing slashes for POST.
+def build_auth_sequence() -> List[dict]:
+    seq = []
+    expl = _explicit_candidate()
+    if expl:
+        seq.append(expl)
+    seq.extend(_fallback_candidates())
+    # De-dup
+    uniq = []
+    seen = set()
+    for h in seq:
+        k = tuple(sorted(h.items()))
+        if k not in seen:
+            uniq.append(h)
+            seen.add(k)
+    return uniq
+
 EXTRACT_PATHS = ["extract/", "extract"]
 
 def api_post_with_fallbacks(files, data, want_sync: bool) -> Tuple[Optional[requests.Response], dict, str]:
-    """
-    Try env-driven header first, then fallback candidates.
-    Returns: (response, used_headers, used_path)
-    """
     if not API_KEY:
         raise RuntimeError("Missing RFP_API_KEY env var.")
-
     paths = ["extract/sync"] if want_sync else EXTRACT_PATHS
     last_error = None
-
-    # 1) Try explicit env-configured header first
-    explicit = build_explicit_auth_header()
-    if explicit:
-        for path in paths:
-            url = _ep(path)
-            try:
-                r = requests.post(url, headers=explicit, files=files, data=data, timeout=REQUEST_TIMEOUT)
-                print(f"[POST] explicit {url} -> {r.status_code} hdr={list(explicit.keys())[0]}:{str(explicit[list(explicit.keys())[0]])[:12]}…")
-                if r.status_code == 200:
-                    return r, explicit, path
-                last_error = (r.status_code, (r.text or "")[:500])
-            except requests.RequestException as e:
-                last_error = (None, str(e))
-
-    # 2) Fallback header guesses
     for path in paths:
         url = _ep(path)
-        for build in AUTH_CANDIDATES:
-            hdrs = build(API_KEY)
+        for hdrs in build_auth_sequence():
             try:
                 r = requests.post(url, headers=hdrs, files=files, data=data, timeout=REQUEST_TIMEOUT)
-                print(f"[POST] fallback {url} -> {r.status_code} using {list(hdrs.keys())[0]}:{hdrs[list(hdrs.keys())[0]][:12]}…")
+                body_snip = (r.text or "")[:300]
+                logger.info(f"[POST] {url} -> {r.status_code} using {list(hdrs.keys())[0]}: {body_snip!r}")
                 if r.status_code == 200:
                     return r, hdrs, path
-                if r.status_code in (400, 401, 403, 422):
-                    last_error = (r.status_code, (r.text or "")[:500])
-                    continue
-                return r, hdrs, path
+                last_error = (r.status_code, body_snip, hdrs, path)
             except requests.RequestException as e:
-                last_error = (None, str(e))
+                last_error = (None, str(e), hdrs, path)
+                logger.warning(f"[POST] {url} exception with {hdrs}: {e}")
                 continue
-
-    # If we get here, nothing worked
     resp = requests.models.Response()
     resp.status_code = 599
     resp._content = (f"All auth variants failed. Last error: {last_error}").encode()
@@ -206,20 +209,23 @@ def api_post_with_fallbacks(files, data, want_sync: bool) -> Tuple[Optional[requ
 
 def api_get(path: str, headers: dict) -> requests.Response:
     url = _ep(path)
-    return requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+    r = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT)
+    logger.info(f"[GET]  {url} -> {r.status_code} { (r.text or '')[:200]!r }")
+    return r
 
 def api_delete(path: str, headers: dict) -> requests.Response:
     url = _ep(path)
-    return requests.delete(url, headers=headers, timeout=REQUEST_TIMEOUT)
+    r = requests.delete(url, headers=headers, timeout=REQUEST_TIMEOUT)
+    logger.info(f"[DEL]  {url} -> {r.status_code} { (r.text or '')[:200]!r }")
+    return r
 
 # ============================== Routes ===============================
 @app.route("/")
 def index():
-    # Help you see what the app is configured to hit
-    print(f"[CFG] API_BASE_URL={API_BASE_URL}")
-    print(f"[CFG] API_KEY={redacted(API_KEY)}")
-    print(f"[CFG] AUTH_NAME={RFP_API_KEY_HEADER_NAME or '(none)'} AUTH_SCHEME={RFP_API_AUTH_SCHEME or '(none)'}")
-    print(f"[CFG] TIMEOUT={REQUEST_TIMEOUT}s")
+    logger.info(f"[CFG] API_BASE_URL={API_BASE_URL}")
+    logger.info(f"[CFG] API_KEY={redacted(API_KEY)}")
+    logger.info(f"[CFG] AUTH_NAME={EXPLICIT_AUTH_NAME or 'auto'} AUTH_SCHEME={EXPLICIT_AUTH_SCHEME or 'auto'}")
+    logger.info(f"[CFG] TIMEOUT={REQUEST_TIMEOUT}s")
     stats = load_stats()
     api_config = {
         "base_url": API_BASE_URL,
@@ -229,46 +235,19 @@ def index():
     }
     return render_template("index.html", api_config=api_config, stats=stats)
 
-@app.route("/_diag")
-def diag():
-    hdr = build_explicit_auth_header()
-    preview = {}
-    if hdr:
-        for k, v in hdr.items():
-            if isinstance(v, str) and len(v) > 8:
-                preview[k] = v[:4] + "••••" + v[-4:]
-            else:
-                preview[k] = "••••"
-    return jsonify({
-        "api_base_url": API_BASE_URL,
-        "api_key_set": bool(API_KEY),
-        "auth_header_name": RFP_API_KEY_HEADER_NAME or None,
-        "auth_scheme": RFP_API_AUTH_SCHEME or None,
-        "using_explicit_header": bool(hdr),
-        "sample_header_preview": preview,
-        "upload_folder": UPLOAD_FOLDER,
-        "stats_file": STATS_FILE,
-    })
-
-@app.route("/healthz")
-def healthz():
-    return jsonify({"ok": True, "time": now_iso()})
-
 @app.route("/api/upload", methods=["POST"])
 def upload_file():
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
-
     file = request.files["file"]
     if file.filename == "":
         return jsonify({"error": "No file selected"}), 400
-
     if not allowed_file(file.filename):
         return jsonify({"error": "Invalid file type"}), 400
 
     use_llm = str(request.form.get("use_llm", "false")).lower() == "true"
     use_sync = str(request.form.get("use_sync", "false")).lower() == "true"
-    mode = request.form.get("mode", "balanced")  # balanced | fast | thorough
+    mode = request.form.get("mode", "balanced")
 
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
@@ -279,33 +258,30 @@ def upload_file():
         with open(filepath, "rb") as f:
             files = {"file": (filename, f, mime)}
             data = {"use_llm": "true" if use_llm else "false", "mode": mode}
+            logger.info(f"[UPLOAD] use_llm={use_llm} use_sync={use_sync} mode={mode} file={filename} size={os.path.getsize(filepath)}")
 
-            print(f"[UPLOAD] use_llm={use_llm} use_sync={use_sync} mode={mode} file={filename} size={os.path.getsize(filepath)}")
             resp, used_headers, used_path = api_post_with_fallbacks(files, data, want_sync=use_sync)
             body_snip = (resp.text or "")[:500] if resp is not None else ""
-            print(f"[UPLOAD] status={getattr(resp, 'status_code', None)} path={used_path} hdr={list(used_headers.keys())[:1]} body_snip={body_snip!r}")
+            logger.info(f"[UPLOAD] status={getattr(resp, 'status_code', None)} path={used_path} hdr={list(used_headers.keys())[:1]} body_snip={body_snip!r}")
 
         if resp is None:
             return jsonify({"error": "No response from extractor"}), 502
-
         if resp.status_code != 200:
-            # Surface server message to front-end
             return jsonify({"error": f"HTTP {resp.status_code}: {resp.text}"}), 502
 
         result = resp.json() if "application/json" in (resp.headers.get("content-type","").lower()) else {}
-        # SYNC: returns questions directly
+
         if use_sync and isinstance(result, dict) and "questions" in result:
             job_id = f"sync_{int(time.time())}"
             job_data[job_id] = {
                 "status": "completed",
                 "questions": result.get("questions") or [],
                 "timestamp": now_iso(),
-                "auth_headers": used_headers,   # cache the working header
+                "auth_headers": used_headers,
             }
             update_stats(job_data[job_id]["questions"], processing_time_sec=5.0)
             return jsonify({"success": True, "job_id": job_id, "questions": result.get("questions", [])})
 
-        # ASYNC: expect job_id
         job_id = (result or {}).get("job_id")
         if not job_id:
             return jsonify({"error": f"Extractor did not return job_id. Raw: {result}"}), 502
@@ -313,16 +289,21 @@ def upload_file():
         job_data[job_id] = {
             "status": "processing",
             "timestamp": now_iso(),
-            "auth_headers": used_headers,  # cache working header
+            "auth_headers": used_headers,
         }
         return jsonify({"success": True, "job_id": job_id, "async": True})
 
     except Exception as e:
+        logger.exception("[UPLOAD] exception")
         return jsonify({"error": str(e)}), 500
     finally:
         try:
             if os.path.exists(filepath):
                 os.remove(filepath)
+            for name in os.listdir(app.config["UPLOAD_FOLDER"]):
+                p = os.path.join(app.config["UPLOAD_FOLDER"], name)
+                if os.path.isfile(p) and os.path.getsize(p) == 0:
+                    os.remove(p)
         except Exception:
             pass
 
@@ -332,25 +313,21 @@ def poll_job(job_id: str):
     if not job:
         return jsonify({"error": "Job not found"}), 404
 
-    # Completed (cached)
     if job.get("status") == "completed":
         return jsonify(job)
 
-    headers = job.get("auth_headers") or build_explicit_auth_header() or AUTH_CANDIDATES[0](API_KEY)
+    headers = job.get("auth_headers") or (build_auth_sequence()[0] if build_auth_sequence() else {})
     try:
         r = api_get(f"jobs/{job_id}", headers)
-        print(f"[POLL] GET jobs/{job_id} -> {r.status_code}")
         if r.status_code == 200:
             payload = r.json()
             job.update(payload or {})
             state = (payload or {}).get("status", "").lower()
 
-            # If done, ensure we have questions (some servers embed; others need /questions)
             if state == "completed":
                 if "questions" in payload and payload["questions"] is not None:
                     update_stats(payload["questions"], processing_time_sec=30.0)
                     return jsonify(payload)
-                # fallback: fetch questions endpoint
                 rq = api_get(f"jobs/{job_id}/questions", headers)
                 if rq.status_code == 200:
                     questions = rq.json()
@@ -362,10 +339,8 @@ def poll_job(job_id: str):
             if state == "failed":
                 return jsonify(payload)
 
-            # still processing
             return jsonify({"status": "processing"})
 
-        # If 404, try to fetch questions (job might be cleaned)
         if r.status_code == 404:
             rq = api_get(f"jobs/{job_id}/questions", headers)
             if rq.status_code == 200:
@@ -390,7 +365,7 @@ def get_job_questions(job_id: str):
     if job.get("status") == "completed" and "questions" in job:
         return jsonify(job["questions"])
 
-    headers = job.get("auth_headers") or build_explicit_auth_header() or AUTH_CANDIDATES[0](API_KEY)
+    headers = job.get("auth_headers") or (build_auth_sequence()[0] if build_auth_sequence() else {})
     r = api_get(f"jobs/{job_id}/questions", headers)
     if r.status_code == 200:
         qs = r.json()
@@ -406,7 +381,7 @@ def review(job_id: str):
 
     questions = job.get("questions") or []
     if not questions:
-        headers = job.get("auth_headers") or build_explicit_auth_header() or AUTH_CANDIDATES[0](API_KEY)
+        headers = job.get("auth_headers") or (build_auth_sequence()[0] if build_auth_sequence() else {})
         r = api_get(f"jobs/{job_id}/questions", headers)
         if r.status_code == 200:
             questions = r.json()
@@ -422,7 +397,6 @@ def save_edits(job_id: str):
         return jsonify({"success": False, "error": "No questions provided"}), 400
 
     edits = job_edits.setdefault(job_id, [])
-    # merge by qid
     idx = {q.get("qid"): i for i, q in enumerate(edits) if q.get("qid")}
     for q in questions:
         qid = q.get("qid")
@@ -431,20 +405,6 @@ def save_edits(job_id: str):
         else:
             edits.append(q)
     return jsonify({"success": True})
-
-# No-op delete to satisfy the front-end button; removes any edited entry with this qid
-@app.route("/api/delete_job/<qid>", methods=["DELETE"])
-def delete_question(qid: str):
-    removed = 0
-    for job_id, edits in job_edits.items():
-        keep = []
-        for q in edits:
-            if q.get("qid") == qid:
-                removed += 1
-                continue
-            keep.append(q)
-        job_edits[job_id] = keep
-    return jsonify({"success": True, "removed": removed})
 
 @app.route("/api/export/<job_id>/<fmt>")
 def export_data(job_id: str, fmt: str):
@@ -456,24 +416,6 @@ def export_data(job_id: str, fmt: str):
     edited = job_edits.get(job_id, [])
     edited_map = {q.get("qid"): q for q in edited if q.get("qid")}
     merged = [edited_map.get(o.get("qid"), o) for o in original]
-
-    # Optional filters from query params
-    approved_only = str(request.args.get("approved", "false")).lower() == "true"
-    high_conf_only = str(request.args.get("high_confidence", "false")).lower() == "true"
-
-    def _passes(q: dict) -> bool:
-        if approved_only:
-            if (q.get("status") or "").lower() != "approved":
-                return False
-        if high_conf_only:
-            try:
-                if float(q.get("confidence", 0.0)) < 0.8:
-                    return False
-            except Exception:
-                return False
-        return True
-
-    merged = [q for q in merged if _passes(q or {})]
 
     if fmt == "docx":
         try:
@@ -502,6 +444,7 @@ def export_data(job_id: str, fmt: str):
                              download_name=fname,
                              mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
         except Exception as e:
+            logger.exception("[EXPORT DOCX] exception")
             return jsonify({"error": f"DOCX export failed: {e}"}), 500
 
     if fmt == "xlsx":
@@ -517,9 +460,79 @@ def export_data(job_id: str, fmt: str):
                              download_name=fname,
                              mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         except Exception as e:
+            logger.exception("[EXPORT XLSX] exception")
             return jsonify({"error": f"XLSX export failed: {e}"}), 500
 
     return jsonify({"error": "Invalid format"}), 400
+
+# ========================== Diagnostics ==========================
+
+def _tiny_docx_bytes() -> bytes:
+    return b"Hello RFP"
+
+@app.route("/_diag")
+def diag():
+    env = {
+        "api_base_url": API_BASE_URL,
+        "api_key_redacted": redacted(API_KEY),
+        "explicit_auth_name": EXPLICIT_AUTH_NAME or None,
+        "explicit_auth_scheme": EXPLICIT_AUTH_SCHEME or None,
+        "timeout": REQUEST_TIMEOUT,
+        "log_file": LOG_PATH,
+    }
+
+    results = {"env": env, "probes": {"health": [], "extract": []}}
+    headers_seq = build_auth_sequence()
+
+    # Health probe
+    health_url = _ep("health/ready")
+    for hdr in headers_seq:
+        try:
+            r = requests.get(health_url, headers=hdr, timeout=REQUEST_TIMEOUT)
+            results["probes"]["health"].append({
+                "url": health_url,
+                # FIX: no stray paren
+                "used_header": {k: (v.split()[0] + " <redacted>") if " " in v else "<redacted>" for k, v in hdr.items()},
+                "status": r.status_code,
+                "body_snip": (r.text or "")[:200],
+            })
+        except Exception as e:
+            results["probes"]["health"].append({
+                "url": health_url,
+                "used_header": {k: "<error>" for k in hdr},
+                "status": None,
+                "error": str(e),
+            })
+
+    # Extract probe
+    for path in EXTRACT_PATHS:
+        url = _ep(path)
+        for hdr in headers_seq:
+            try:
+                files = {"file": ("tiny.docx", io.BytesIO(_tiny_docx_bytes()),
+                                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+                data = {"use_llm": "false", "mode": "balanced"}
+                r = requests.post(url, headers=hdr, files=files, data=data, timeout=REQUEST_TIMEOUT)
+                results["probes"]["extract"].append({
+                    "url": url,
+                    # FIX: no stray paren
+                    "used_header": {k: (v.split()[0] + " <redacted>") if " " in v else "<redacted>" for k, v in hdr.items()},
+                    "status": r.status_code,
+                    "body_snip": (r.text or "")[:300],
+                })
+            except Exception as e:
+                results["probes"]["extract"].append({
+                    "url": url,
+                    "used_header": {k: "<error>" for k in hdr},
+                    "status": None,
+                    "error": str(e),
+                })
+
+    return app.response_class(
+        response=json.dumps(results, indent=2),
+        status=200,
+        mimetype="application/json"
+    )
 
 # ========================== Minimal error page ==========================
 @app.errorhandler(413)
@@ -530,8 +543,7 @@ def too_large(_e):
 
 # ============================== Dev server ==============================
 if __name__ == "__main__":
-    print(f"Starting on http://localhost:5002")
-    print(f"Extractor base: {API_BASE_URL}")
-    print(f"API key: {redacted(API_KEY)}")
-    print(f"Auth header: {RFP_API_KEY_HEADER_NAME or '(none)'}; scheme: {RFP_API_AUTH_SCHEME or '(none)'}")
+    logger.info(f"Starting on http://localhost:5002")
+    logger.info(f"Extractor base: {API_BASE_URL}")
+    logger.info(f"API key: {redacted(API_KEY)}")
     app.run(host="0.0.0.0", port=5002, debug=True)
