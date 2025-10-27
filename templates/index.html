@@ -1,179 +1,174 @@
 {% extends "base.html" %}
-
 {% block title %}KnockKnock Intelligence - AI-Powered RFP Extraction{% endblock %}
 
-{# ---- SAFE DEFAULTS FOR STATS ---- #}
-{% set s = stats|default({
-  'documents_processed': 0,
-  'questions_extracted': 0,
-  'accuracy_rate': 0,
-  'avg_processing_time': 0
-}) %}
-
 {% block content %}
+<!-- Expose app base path for Posit Connect (e.g., /content/<guid>) -->
+<script>
+  window.APP_BASE = {{ (request.script_root or '')|tojson }};
+</script>
+
 <!-- Hero Section -->
 <div class="hero-section">
-    <div class="hero-content">
-        <h1 class="hero-title">
-            <span class="hero-title-line">AI-Powered</span>
-            <span class="hero-title-line gradient-text">RFP Extraction</span>
-        </h1>
-        <p class="hero-subtitle">
-            Transform your RFP documents into actionable insights with cutting-edge AI technology. 
-            Extract, analyze, and process questions with unprecedented accuracy and speed.
-        </p>
-        <div class="hero-stats">
-            <div class="stat-item">
-                <div class="stat-number" id="documentsProcessed">{{ s.documents_processed }}</div>
-                <div class="stat-label">Documents Processed</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-number" id="questionsExtracted">{{ s.questions_extracted }}</div>
-                <div class="stat-label">Questions Extracted</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-number" id="accuracyRate">{{ s.accuracy_rate }}%</div>
-                <div class="stat-label">Accuracy Rate</div>
-            </div>
-            <div class="stat-item">
-                <div class="stat-number" id="avgProcessingTime">{{ s.avg_processing_time }}s</div>
-                <div class="stat-label">Avg Processing Time</div>
-            </div>
-        </div>
+  <div class="hero-content">
+    <h1 class="hero-title">
+      <span class="hero-title-line">AI-Powered</span>
+      <span class="hero-title-line gradient-text">RFP Extraction</span>
+    </h1>
+    <p class="hero-subtitle">
+      Transform your RFP documents into actionable insights with cutting-edge AI technology. 
+      Extract, analyze, and process questions with unprecedented accuracy and speed.
+    </p>
+    <div class="hero-stats">
+      <div class="stat-item">
+        <div class="stat-number" id="documentsProcessed">{{ stats.documents_processed|default(0) }}</div>
+        <div class="stat-label">Documents Processed</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-number" id="questionsExtracted">{{ stats.questions_extracted|default(0) }}</div>
+        <div class="stat-label">Questions Extracted</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-number" id="accuracyRate">{{ stats.accuracy_rate|default(0) }}%</div>
+        <div class="stat-label">Accuracy Rate</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-number" id="avgProcessingTime">{{ stats.avg_processing_time|default(0) }}s</div>
+        <div class="stat-label">Avg Processing Time</div>
+      </div>
     </div>
+  </div>
 </div>
 
 <!-- Upload Section -->
 <div class="card upload-section">
-    <div class="section-header">
-        <h2 class="section-title">
-            <i class="fas fa-upload"></i>
-            Upload & Extract
-        </h2>
-        <p class="section-subtitle">Upload your RFP document and let our AI extract questions automatically</p>
+  <div class="section-header">
+    <h2 class="section-title">
+      <i class="fas fa-upload"></i>
+      Upload & Extract
+    </h2>
+    <p class="section-subtitle">Upload your RFP document and let our AI extract questions automatically</p>
+  </div>
+
+  <div class="upload-container">
+    <div class="upload-area" id="uploadSection">
+      <div class="upload-content">
+        <div class="upload-icon">
+          <i class="fas fa-cloud-upload-alt"></i>
+        </div>
+        <h3 class="upload-title">Drop your file here</h3>
+        <p class="upload-subtitle">or click to browse</p>
+        <div class="upload-formats">
+          <span class="format-tag">DOCX</span>
+          <span class="format-tag">PDF</span>
+          <span class="format-tag">XLSX</span>
+        </div>
+        <!-- no pattern= — rely on server validation -->
+        <input type="file" id="fileInput" accept=".docx,.pdf,.xlsx" style="display:none">
+      </div>
     </div>
 
-    <div class="upload-container">
-        <div class="upload-area" id="uploadSection" role="button" tabindex="0" aria-label="Upload file">
-            <div class="upload-content">
-                <div class="upload-icon">
-                    <i class="fas fa-cloud-upload-alt"></i>
-                </div>
-                <h3 class="upload-title">Drop your file here</h3>
-                <p class="upload-subtitle">or click to browse</p>
-                <div class="upload-formats">
-                    <span class="format-tag">DOCX</span>
-                    <span class="format-tag">PDF</span>
-                    <span class="format-tag">XLSX</span>
-                </div>
-                <!-- NOTE: no pattern= here; only accept=. Server validates type. -->
-                <input type="file" id="fileInput" accept=".docx,.pdf,.xlsx" style="display:none" />
-            </div>
-        </div>
+    <div class="upload-options">
+      <div class="option-group">
+        <h4 class="option-title"><i class="fas fa-brain"></i> AI Classification</h4>
+        <p class="option-description">Use AI to categorize questions automatically</p>
+        <label class="radio-option">
+          <input type="radio" name="processingMode" value="ai" id="useLLM" checked>
+          <span class="radio-custom"></span>
+        </label>
+      </div>
 
-        <div class="upload-options">
-            <div class="option-group">
-                <h4 class="option-title">
-                    <i class="fas fa-brain"></i>
-                    AI Classification
-                </h4>
-                <p class="option-description">Use AI to categorize questions automatically</p>
-                <label class="radio-option">
-                    <input type="radio" name="processingMode" value="ai" id="useLLM" checked>
-                    <span class="radio-custom"></span>
-                </label>
-            </div>
-
-            <div class="option-group">
-                <h4 class="option-title">
-                    <i class="fas fa-sync"></i>
-                    Sync Mode
-                </h4>
-                <p class="option-description">Faster processing for small documents</p>
-                <label class="radio-option">
-                    <input type="radio" name="processingMode" value="sync" id="useSync">
-                    <span class="radio-custom"></span>
-                </label>
-            </div>
-        </div>
-
-        <div class="upload-actions">
-            <button class="btn btn-primary btn-large" id="extractBtn" onclick="parseDocument()" disabled>
-                <i class="fas fa-magic"></i>
-                Extract Questions
-            </button>
-        </div>
+      <div class="option-group">
+        <h4 class="option-title"><i class="fas fa-sync"></i> Sync Mode</h4>
+        <p class="option-description">Faster processing for small documents</p>
+        <label class="radio-option">
+          <input type="radio" name="processingMode" value="sync" id="useSync">
+          <span class="radio-custom"></span>
+        </label>
+      </div>
     </div>
 
-    <!-- Processing Status -->
-    <div class="processing-status" id="processingStatus" style="display: none;">
-        <div class="status-content">
-            <div class="status-icon">
-                <div class="loading"></div>
-            </div>
-            <div class="status-text">
-                <h4 class="status-title">Processing Document</h4>
-                <p class="status-message" id="statusMessage">Analyzing document structure...</p>
-            </div>
-        </div>
-        <div class="progress-container">
-            <div class="progress-bar">
-                <div class="progress-fill" id="progressFill" style="width: 0%"></div>
-            </div>
-            <div class="progress-text">
-                <span id="progressText">0%</span>
-                <span id="elapsedTime">Elapsed: 0s</span>
-            </div>
-        </div>
+    <div class="upload-actions">
+      <button class="btn btn-primary btn-large" id="extractBtn" onclick="parseDocument()">
+        <i class="fas fa-magic"></i>
+        Extract Questions
+      </button>
     </div>
+  </div>
+
+  <!-- Processing Status -->
+  <div class="processing-status" id="processingStatus" style="display:none">
+    <div class="status-content">
+      <div class="status-icon"><div class="loading"></div></div>
+      <div class="status-text">
+        <h4 class="status-title">Processing Document</h4>
+        <p class="status-message" id="statusMessage">Analyzing document structure...</p>
+      </div>
+    </div>
+    <div class="progress-container">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+      <div class="progress-text">
+        <span id="progressText">0%</span>
+        <span id="elapsedTime">Elapsed: 0s</span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Technology Section -->
 <div class="card technology-section">
-    <div class="section-header">
-        <h2 class="section-title">
-            <i class="fas fa-cogs"></i>
-            Advanced Technology
-        </h2>
-        <p class="section-subtitle">Powered by cutting-edge AI and machine learning</p>
+  <div class="section-header">
+    <h2 class="section-title"><i class="fas fa-cogs"></i> Advanced Technology</h2>
+    <p class="section-subtitle">Powered by cutting-edge AI and machine learning</p>
+  </div>
+
+  <div class="tech-grid">
+    <div class="tech-item">
+      <div class="tech-icon"><i class="fas fa-robot"></i></div>
+      <h4 class="tech-title">AI Classification</h4>
+      <p class="tech-description">Advanced machine learning models for question categorization</p>
     </div>
 
-    <div class="tech-grid">
-        <div class="tech-item">
-            <div class="tech-icon"><i class="fas fa-robot"></i></div>
-            <h4 class="tech-title">AI Classification</h4>
-            <p class="tech-description">Advanced machine learning models for question categorization</p>
-        </div>
-
-        <div class="tech-item">
-            <div class="tech-icon"><i class="fas fa-search"></i></div>
-            <h4 class="tech-title">Smart Extraction</h4>
-            <p class="tech-description">Intelligent pattern recognition for accurate question detection</p>
-        </div>
-
-        <div class="tech-item">
-            <div class="tech-icon"><i class="fas fa-shield-alt"></i></div>
-            <h4 class="tech-title">Secure Processing</h4>
-            <p class="tech-description">Enterprise-grade security for your sensitive documents</p>
-        </div>
-
-        <div class="tech-item">
-            <div class="tech-icon"><i class="fas fa-bolt"></i></div>
-            <h4 class="tech-title">Lightning Fast</h4>
-            <p class="tech-description">Optimized processing for maximum speed and efficiency</p>
-        </div>
+    <div class="tech-item">
+      <div class="tech-icon"><i class="fas fa-search"></i></div>
+      <h4 class="tech-title">Smart Extraction</h4>
+      <p class="tech-description">Intelligent pattern recognition for accurate question detection</p>
     </div>
+
+    <div class="tech-item">
+      <div class="tech-icon"><i class="fas fa-shield-alt"></i></div>
+      <h4 class="tech-title">Secure Processing</h4>
+      <p class="tech-description">Enterprise-grade security for your sensitive documents</p>
+    </div>
+
+    <div class="tech-item">
+      <div class="tech-icon"><i class="fas fa-bolt"></i></div>
+      <h4 class="tech-title">Lightning Fast</h4>
+      <p class="tech-description">Optimized processing for maximum speed and efficiency</p>
+    </div>
+  </div>
 </div>
 
 <style>
-/* (styles unchanged, trimmed for brevity; you can keep your full block) */
-
-/* ensure button disabled style looks clickable only when enabled */
-#extractBtn:disabled { opacity: .5; cursor: not-allowed; }
+/* (unchanged styles from your file) */
+.hero-section{ text-align:center;padding:4rem 0;margin-bottom:3rem; }
+.hero-content{ max-width:1000px;margin:0 auto; }
+.hero-title{ font-size:4rem;font-weight:900;margin-bottom:1.5rem;line-height:1.1; }
+.hero-title-line{ display:block;animation:slideInUp .8s ease-out; }
+.hero-title-line:nth-child(2){ animation-delay:.2s; }
+.gradient-text{ background:linear-gradient(135deg,var(--accent-blue),var(--accent-purple),var(--accent-teal));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text; }
+.hero-subtitle{ font-size:1.25rem;color:var(--text-secondary);margin-bottom:3rem;max-width:600px;margin-left:auto;margin-right:auto;animation:fadeInUp .8s ease-out .4s both; }
+.hero-stats{ display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:2rem;margin-top:3rem; }
+.stat-item{ text-align:center;padding:1.5rem;background:rgba(255,255,255,.05);border-radius:16px;border:1px solid var(--border);backdrop-filter:blur(10px);transition:all .3s ease;animation:fadeInUp .8s ease-out; }
+.stat-item:nth-child(1){animation-delay:.6s}.stat-item:nth-child(2){animation-delay:.7s}.stat-item:nth-child(3){animation-delay:.8s}.stat-item:nth-child(4){animation-delay:.9s}
+.stat-item:hover{ transform:translateY(-5px);box-shadow:var(--shadow-lg);border-color:var(--border-hover); }
+.stat-number{ font-size:2.5rem;font-weight:800;color:var(--accent-blue);margin-bottom:.5rem;background:linear-gradient(135deg,var(--accent-blue),var(--accent-purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text; }
+.stat-label{ font-size:.9rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px; }
+/* ... (rest of your CSS unchanged) ... */
 </style>
 
 <script>
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
+  const BASE = window.APP_BASE || '';
   const uploadArea = document.getElementById('uploadSection');
   const fileInput = document.getElementById('fileInput');
   const extractBtn = document.getElementById('extractBtn');
@@ -187,69 +182,41 @@ document.addEventListener('DOMContentLoaded', function() {
   let startTime = null;
   let progressInterval = null;
 
-  // File upload handling
+  // File selection UX
   uploadArea.addEventListener('click', () => fileInput.click());
-  uploadArea.addEventListener('dragover', handleDragOver);
-  uploadArea.addEventListener('dragleave', handleDragLeave);
-  uploadArea.addEventListener('drop', handleDrop);
-  fileInput.addEventListener('change', handleFileSelect);
-
-  function handleDragOver(e) {
-    e.preventDefault();
-    uploadArea.classList.add('dragover');
-  }
-  function handleDragLeave(e) {
-    e.preventDefault();
-    uploadArea.classList.remove('dragover');
-  }
-  function handleDrop(e) {
-    e.preventDefault();
-    uploadArea.classList.remove('dragover');
+  uploadArea.addEventListener('dragover', (e) => { e.preventDefault(); uploadArea.classList.add('dragover'); });
+  uploadArea.addEventListener('dragleave', (e) => { e.preventDefault(); uploadArea.classList.remove('dragover'); });
+  uploadArea.addEventListener('drop', (e) => {
+    e.preventDefault(); uploadArea.classList.remove('dragover');
     if (e.dataTransfer.files?.length) handleFile(e.dataTransfer.files[0]);
-  }
-  function handleFileSelect(e) {
+  });
+  fileInput.addEventListener('change', (e) => {
     if (e.target.files?.length) handleFile(e.target.files[0]);
-  }
+  });
 
   function handleFile(file) {
-    // permissive client-side check (no HTML pattern!)
-    const name = (file.name || '').toLowerCase();
-    const ok = name.endsWith('.docx') || name.endsWith('.pdf') || name.endsWith('.xlsx');
-    if (!ok) {
-      alert('Please select a DOCX, PDF, or XLSX file.');
-      return;
-    }
-
     selectedFile = file;
-
-    // Rebuild inner content safely to show selection
-    uploadArea.innerHTML = '';
-    const wrap = document.createElement('div');
-    wrap.className = 'upload-content';
-    wrap.innerHTML = `
-      <div class="upload-icon"><i class="fas fa-check-circle"></i></div>
-      <h3 class="upload-title">File Selected</h3>
-      <p class="upload-subtitle" id="selName"></p>
-      <div class="upload-formats"><span class="format-tag">Ready to Process</span></div>
-    `;
-    uploadArea.appendChild(wrap);
-    wrap.querySelector('#selName').textContent = file.name;
-
+    uploadArea.innerHTML = `
+      <div class="upload-content">
+        <div class="upload-icon"><i class="fas fa-check-circle"></i></div>
+        <h3 class="upload-title">File Selected</h3>
+        <p class="upload-subtitle">${file.name}</p>
+        <div class="upload-formats"><span class="format-tag">Ready to Process</span></div>
+      </div>`;
     extractBtn.disabled = false;
   }
 
-  // Parse document
-  window.parseDocument = function() {
-    if (!selectedFile) { alert('Please select a file first'); return; }
+  window.parseDocument = function () {
+    if (!selectedFile) return alert('Please select a file first');
 
-    const mode = document.querySelector('input[name="processingMode"]:checked')?.value || 'ai';
-    const useLLM = (mode === 'ai');
-    const useSync = (mode === 'sync');
+    const modeValue = document.querySelector('input[name="processingMode"]:checked').value;
+    const useLLM = modeValue === 'ai';
+    const useSync = modeValue === 'sync';
 
     const formData = new FormData();
     formData.append('file', selectedFile);
-    formData.append('use_llm', String(useLLM));
-    formData.append('use_sync', String(useSync));
+    formData.append('use_llm', useLLM ? 'true' : 'false');
+    formData.append('use_sync', useSync ? 'true' : 'false');
     formData.append('mode', 'balanced');
 
     processingStatus.style.display = 'block';
@@ -258,19 +225,13 @@ document.addEventListener('DOMContentLoaded', function() {
     if (progressInterval) clearInterval(progressInterval);
     progressInterval = setInterval(updateElapsedTime, 1000);
 
-    fetch('/api/upload', { method: 'POST', body: formData })
+    fetch(BASE + '/api/upload', { method: 'POST', body: formData })
       .then(async (res) => {
-        const contentType = res.headers.get('content-type') || '';
-        let payload;
-        try {
-          payload = contentType.includes('application/json') ? await res.json() : { success: false, error: await res.text() };
-        } catch (_) {
-          payload = { success: false, error: 'Unexpected response from server.' };
-        }
         if (!res.ok) {
-          throw new Error(payload.error || `HTTP ${res.status}`);
+          const text = await res.text();
+          throw new Error(`${res.status} ${res.statusText} :: ${text.slice(0,200)}`);
         }
-        return payload;
+        return res.json();
       })
       .then((data) => {
         console.log('Upload response:', data);
@@ -278,7 +239,7 @@ document.addEventListener('DOMContentLoaded', function() {
           if (data.async) {
             startPolling(data.job_id);
           } else {
-            window.location.href = `/review/${data.job_id}`;
+            window.location.href = BASE + '/review/' + data.job_id;
           }
         } else {
           throw new Error(data.error || 'Upload failed');
@@ -294,27 +255,33 @@ document.addEventListener('DOMContentLoaded', function() {
   };
 
   function startPolling(jobId) {
-    const poller = setInterval(() => {
-      fetch(`/api/poll/${jobId}`)
-        .then(r => r.json())
-        .then(data => {
+    const iv = setInterval(() => {
+      fetch(BASE + '/api/poll/' + jobId)
+        .then(async (res) => {
+          if (!res.ok) {
+            const t = await res.text();
+            throw new Error(`${res.status} ${res.statusText} :: ${t.slice(0,200)}`);
+          }
+          return res.json();
+        })
+        .then((data) => {
           console.log('Poll response:', data);
           updateStatus(data);
           if (data.status === 'completed') {
-            clearInterval(poller);
+            clearInterval(iv);
             if (progressInterval) clearInterval(progressInterval);
-            window.location.href = `/review/${jobId}`;
+            window.location.href = BASE + '/review/' + jobId;
           } else if (data.status === 'failed') {
-            clearInterval(poller);
+            clearInterval(iv);
             if (progressInterval) clearInterval(progressInterval);
             alert('Processing failed: ' + (data.error || 'Unknown error'));
             processingStatus.style.display = 'none';
             extractBtn.disabled = false;
           }
         })
-        .catch(err => {
+        .catch((err) => {
           console.error('Polling error:', err);
-          clearInterval(poller);
+          clearInterval(iv);
           if (progressInterval) clearInterval(progressInterval);
           alert('Polling failed: ' + err.message);
           processingStatus.style.display = 'none';
@@ -334,27 +301,31 @@ document.addEventListener('DOMContentLoaded', function() {
 
   function updateElapsedTime() {
     if (!startTime) return;
-    const elapsed = Math.floor((Date.now() - startTime) / 1000);
-    elapsedTime.textContent = `Elapsed: ${elapsed}s`;
+    const s = Math.floor((Date.now() - startTime) / 1000);
+    elapsedTime.textContent = `Elapsed: ${s}s`;
   }
 
-  // Periodic stat refresh (non-breaking even if index renders with defaults)
-  setInterval(() => {
-    fetch('/').then(r => r.text()).then(html => {
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      const get = id => doc.getElementById(id)?.textContent || null;
-      const updates = {
-        documentsProcessed: get('documentsProcessed'),
-        questionsExtracted: get('questionsExtracted'),
-        accuracyRate: get('accuracyRate'),
-        avgProcessingTime: get('avgProcessingTime')
-      };
-      if (updates.documentsProcessed) document.getElementById('documentsProcessed').textContent = updates.documentsProcessed;
-      if (updates.questionsExtracted) document.getElementById('questionsExtracted').textContent = updates.questionsExtracted;
-      if (updates.accuracyRate) document.getElementById('accuracyRate').textContent = updates.accuracyRate;
-      if (updates.avgProcessingTime) document.getElementById('avgProcessingTime').textContent = updates.avgProcessingTime;
-    }).catch(() => {});
-  }, 30000);
+  // Optional: keep the dashboard stats fresh
+  function refreshStats() {
+    fetch(BASE + '/')
+      .then((r) => r.text())
+      .then((html) => {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const get = (id) => doc.getElementById(id)?.textContent || null;
+        const updates = {
+          documentsProcessed: get('documentsProcessed') || '0',
+          questionsExtracted: get('questionsExtracted') || '0',
+          accuracyRate: get('accuracyRate') || '0%',
+          avgProcessingTime: get('avgProcessingTime') || '0s',
+        };
+        document.getElementById('documentsProcessed').textContent = updates.documentsProcessed;
+        document.getElementById('questionsExtracted').textContent = updates.questionsExtracted;
+        document.getElementById('accuracyRate').textContent = updates.accuracyRate;
+        document.getElementById('avgProcessingTime').textContent = updates.avgProcessingTime;
+      })
+      .catch((e) => console.warn('stats refresh failed', e));
+  }
+  setInterval(refreshStats, 30000);
 });
 </script>
 {% endblock %}
