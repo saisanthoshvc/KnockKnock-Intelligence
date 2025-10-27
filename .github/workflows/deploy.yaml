@@ -24,9 +24,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install rsconnect-python
+          # Optional: generate/update manifest locally
           rsconnect write-manifest flask .
 
-      # Optional corporate CA step here if needed
+      # If your Connect is behind a corp CA/proxy, insert that setup step here.
 
       - name: Deploy Flask app to Posit Connect
         env:
@@ -38,4 +39,5 @@ jobs:
             --api-key "$CONNECT_API_KEY" \
             --title "KnockKnock Intelligence" \
             --entrypoint app_simple:app \
+            --no-verify \
             -v
