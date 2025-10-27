@@ -143,9 +143,6 @@ def _ep(path: str) -> str:
 # ===================== Auth Candidates & Request Layer ======================
 
 def _explicit_candidate() -> Optional[dict]:
-    """
-    If RFP_API_KEY_HEADER_NAME + RFP_API_AUTH_SCHEME are provided, return that header.
-    """
     if not API_KEY:
         return None
     name = EXPLICIT_AUTH_NAME
@@ -153,10 +150,8 @@ def _explicit_candidate() -> Optional[dict]:
     if not name:
         return None
     if scheme:
-        # e.g. Authorization: Key <token>  OR  knocknock-authentication: Raw <token>
         return {name: f"{scheme} {API_KEY}"}
     else:
-        # Raw value only:  HeaderName: <token>
         return {name: API_KEY}
 
 def _fallback_candidates() -> List[dict]:
@@ -167,7 +162,7 @@ def _fallback_candidates() -> List[dict]:
         {"Authorization": f"Bearer {API_KEY}"},
         {"knocknock-authentication": f"Raw {API_KEY}"},
         {"X-API-Key": API_KEY},
-        {"Authorization": API_KEY},  # raw
+        {"Authorization": API_KEY},
     ]
 
 def build_auth_sequence() -> List[dict]:
@@ -176,7 +171,7 @@ def build_auth_sequence() -> List[dict]:
     if expl:
         seq.append(expl)
     seq.extend(_fallback_candidates())
-    # De-dup by header name + value
+    # De-dup
     uniq = []
     seen = set()
     for h in seq:
@@ -189,13 +184,8 @@ def build_auth_sequence() -> List[dict]:
 EXTRACT_PATHS = ["extract/", "extract"]
 
 def api_post_with_fallbacks(files, data, want_sync: bool) -> Tuple[Optional[requests.Response], dict, str]:
-    """
-    Try the explicit header (if set), then fallbacks, and both extract path forms.
-    Returns: (response, used_headers, used_path)
-    """
     if not API_KEY:
         raise RuntimeError("Missing RFP_API_KEY env var.")
-
     paths = ["extract/sync"] if want_sync else EXTRACT_PATHS
     last_error = None
     for path in paths:
@@ -207,14 +197,11 @@ def api_post_with_fallbacks(files, data, want_sync: bool) -> Tuple[Optional[requ
                 logger.info(f"[POST] {url} -> {r.status_code} using {list(hdrs.keys())[0]}: {body_snip!r}")
                 if r.status_code == 200:
                     return r, hdrs, path
-                # Allow caller to surface non-200s (422/400/403/401/etc)
                 last_error = (r.status_code, body_snip, hdrs, path)
             except requests.RequestException as e:
                 last_error = (None, str(e), hdrs, path)
                 logger.warning(f"[POST] {url} exception with {hdrs}: {e}")
                 continue
-
-    # Synthesize a response to propagate the last error
     resp = requests.models.Response()
     resp.status_code = 599
     resp._content = (f"All auth variants failed. Last error: {last_error}").encode()
@@ -252,17 +239,15 @@ def index():
 def upload_file():
     if "file" not in request.files:
         return jsonify({"error": "No file provided"}), 400
-
     file = request.files["file"]
     if file.filename == "":
         return jsonify({"error": "No file selected"}), 400
-
     if not allowed_file(file.filename):
         return jsonify({"error": "Invalid file type"}), 400
 
     use_llm = str(request.form.get("use_llm", "false")).lower() == "true"
     use_sync = str(request.form.get("use_sync", "false")).lower() == "true"
-    mode = request.form.get("mode", "balanced")  # balanced | fast | thorough
+    mode = request.form.get("mode", "balanced")
 
     filename = secure_filename(file.filename)
     filepath = os.path.join(app.config["UPLOAD_FOLDER"], filename)
@@ -281,24 +266,22 @@ def upload_file():
 
         if resp is None:
             return jsonify({"error": "No response from extractor"}), 502
-
         if resp.status_code != 200:
             return jsonify({"error": f"HTTP {resp.status_code}: {resp.text}"}), 502
 
         result = resp.json() if "application/json" in (resp.headers.get("content-type","").lower()) else {}
-        # SYNC: returns questions directly
+
         if use_sync and isinstance(result, dict) and "questions" in result:
             job_id = f"sync_{int(time.time())}"
             job_data[job_id] = {
                 "status": "completed",
                 "questions": result.get("questions") or [],
                 "timestamp": now_iso(),
-                "auth_headers": used_headers,   # cache the working header
+                "auth_headers": used_headers,
             }
             update_stats(job_data[job_id]["questions"], processing_time_sec=5.0)
             return jsonify({"success": True, "job_id": job_id, "questions": result.get("questions", [])})
 
-        # ASYNC: expect job_id
         job_id = (result or {}).get("job_id")
         if not job_id:
             return jsonify({"error": f"Extractor did not return job_id. Raw: {result}"}), 502
@@ -306,7 +289,7 @@ def upload_file():
         job_data[job_id] = {
             "status": "processing",
             "timestamp": now_iso(),
-            "auth_headers": used_headers,  # cache working header
+            "auth_headers": used_headers,
         }
         return jsonify({"success": True, "job_id": job_id, "async": True})
 
@@ -317,7 +300,6 @@ def upload_file():
         try:
             if os.path.exists(filepath):
                 os.remove(filepath)
-            # keep upload dir clean
             for name in os.listdir(app.config["UPLOAD_FOLDER"]):
                 p = os.path.join(app.config["UPLOAD_FOLDER"], name)
                 if os.path.isfile(p) and os.path.getsize(p) == 0:
@@ -334,7 +316,7 @@ def poll_job(job_id: str):
     if job.get("status") == "completed":
         return jsonify(job)
 
-    headers = job.get("auth_headers") or build_auth_sequence()[0] if build_auth_sequence() else {}
+    headers = job.get("auth_headers") or (build_auth_sequence()[0] if build_auth_sequence() else {})
     try:
         r = api_get(f"jobs/{job_id}", headers)
         if r.status_code == 200:
@@ -486,18 +468,10 @@ def export_data(job_id: str, fmt: str):
 # ========================== Diagnostics ==========================
 
 def _tiny_docx_bytes() -> bytes:
-    """A tiny valid docx (zip) header; enough to get past 'file missing'; content isn't important."""
-    # Fall back to a few bytes if packaging is heavy; header validation fires before body parse anyway.
     return b"Hello RFP"
 
 @app.route("/_diag")
 def diag():
-    """
-    Runs connectivity & auth probes and returns JSON:
-      - env summary
-      - GET /health/ready with each header (if that route exists)
-      - POST /extract and /extract/ with tiny in-memory file using each header
-    """
     env = {
         "api_base_url": API_BASE_URL,
         "api_key_redacted": redacted(API_KEY),
@@ -510,14 +484,15 @@ def diag():
     results = {"env": env, "probes": {"health": [], "extract": []}}
     headers_seq = build_auth_sequence()
 
-    # Health probe (won't fail the page if missing)
+    # Health probe
     health_url = _ep("health/ready")
     for hdr in headers_seq:
         try:
             r = requests.get(health_url, headers=hdr, timeout=REQUEST_TIMEOUT)
             results["probes"]["health"].append({
                 "url": health_url,
-                "used_header": {k: (v.split()[0] + " <redacted>") if " " in v else "<redacted>") for k, v in hdr.items()},
+                # FIX: no stray paren
+                "used_header": {k: (v.split()[0] + " <redacted>") if " " in v else "<redacted>" for k, v in hdr.items()},
                 "status": r.status_code,
                 "body_snip": (r.text or "")[:200],
             })
@@ -529,17 +504,19 @@ def diag():
                 "error": str(e),
             })
 
-    # Extract probe (lightweight)
+    # Extract probe
     for path in EXTRACT_PATHS:
         url = _ep(path)
         for hdr in headers_seq:
             try:
-                files = {"file": ("tiny.docx", io.BytesIO(_tiny_docx_bytes()), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
+                files = {"file": ("tiny.docx", io.BytesIO(_tiny_docx_bytes()),
+                                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}
                 data = {"use_llm": "false", "mode": "balanced"}
                 r = requests.post(url, headers=hdr, files=files, data=data, timeout=REQUEST_TIMEOUT)
                 results["probes"]["extract"].append({
                     "url": url,
-                    "used_header": {k: (v.split()[0] + " <redacted>") if " " in v else "<redacted>") for k, v in hdr.items()},
+                    # FIX: no stray paren
+                    "used_header": {k: (v.split()[0] + " <redacted>") if " " in v else "<redacted>" for k, v in hdr.items()},
                     "status": r.status_code,
                     "body_snip": (r.text or "")[:300],
                 })
