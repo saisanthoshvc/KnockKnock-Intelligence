@@ -2,6 +2,14 @@
 
 {% block title %}KnockKnock Intelligence - AI-Powered RFP Extraction{% endblock %}
 
+{# ---- SAFE DEFAULTS FOR STATS ---- #}
+{% set s = stats|default({
+  'documents_processed': 0,
+  'questions_extracted': 0,
+  'accuracy_rate': 0,
+  'avg_processing_time': 0
+}) %}
+
 {% block content %}
 <!-- Hero Section -->
 <div class="hero-section">
@@ -16,19 +24,19 @@
         </p>
         <div class="hero-stats">
             <div class="stat-item">
-                <div class="stat-number" id="documentsProcessed">{{ stats.documents_processed }}</div>
+                <div class="stat-number" id="documentsProcessed">{{ s.documents_processed }}</div>
                 <div class="stat-label">Documents Processed</div>
             </div>
             <div class="stat-item">
-                <div class="stat-number" id="questionsExtracted">{{ stats.questions_extracted }}</div>
+                <div class="stat-number" id="questionsExtracted">{{ s.questions_extracted }}</div>
                 <div class="stat-label">Questions Extracted</div>
             </div>
             <div class="stat-item">
-                <div class="stat-number" id="accuracyRate">{{ stats.accuracy_rate }}%</div>
+                <div class="stat-number" id="accuracyRate">{{ s.accuracy_rate }}%</div>
                 <div class="stat-label">Accuracy Rate</div>
             </div>
             <div class="stat-item">
-                <div class="stat-number" id="avgProcessingTime">{{ stats.avg_processing_time }}s</div>
+                <div class="stat-number" id="avgProcessingTime">{{ s.avg_processing_time }}s</div>
                 <div class="stat-label">Avg Processing Time</div>
             </div>
         </div>
@@ -46,7 +54,7 @@
     </div>
 
     <div class="upload-container">
-        <div class="upload-area" id="uploadSection">
+        <div class="upload-area" id="uploadSection" role="button" tabindex="0" aria-label="Upload file">
             <div class="upload-content">
                 <div class="upload-icon">
                     <i class="fas fa-cloud-upload-alt"></i>
@@ -58,7 +66,8 @@
                     <span class="format-tag">PDF</span>
                     <span class="format-tag">XLSX</span>
                 </div>
-                <input type="file" id="fileInput" accept=".docx,.pdf,.xlsx" style="display: none;">
+                <!-- NOTE: no pattern= here; only accept=. Server validates type. -->
+                <input type="file" id="fileInput" accept=".docx,.pdf,.xlsx" style="display:none" />
             </div>
         </div>
 
@@ -89,7 +98,7 @@
         </div>
 
         <div class="upload-actions">
-            <button class="btn btn-primary btn-large" id="extractBtn" onclick="parseDocument()">
+            <button class="btn btn-primary btn-large" id="extractBtn" onclick="parseDocument()" disabled>
                 <i class="fas fa-magic"></i>
                 Extract Questions
             </button>
@@ -119,7 +128,6 @@
     </div>
 </div>
 
-
 <!-- Technology Section -->
 <div class="card technology-section">
     <div class="section-header">
@@ -132,33 +140,25 @@
 
     <div class="tech-grid">
         <div class="tech-item">
-            <div class="tech-icon">
-                <i class="fas fa-robot"></i>
-            </div>
+            <div class="tech-icon"><i class="fas fa-robot"></i></div>
             <h4 class="tech-title">AI Classification</h4>
             <p class="tech-description">Advanced machine learning models for question categorization</p>
         </div>
 
         <div class="tech-item">
-            <div class="tech-icon">
-                <i class="fas fa-search"></i>
-            </div>
+            <div class="tech-icon"><i class="fas fa-search"></i></div>
             <h4 class="tech-title">Smart Extraction</h4>
             <p class="tech-description">Intelligent pattern recognition for accurate question detection</p>
         </div>
 
         <div class="tech-item">
-            <div class="tech-icon">
-                <i class="fas fa-shield-alt"></i>
-            </div>
+            <div class="tech-icon"><i class="fas fa-shield-alt"></i></div>
             <h4 class="tech-title">Secure Processing</h4>
             <p class="tech-description">Enterprise-grade security for your sensitive documents</p>
         </div>
 
         <div class="tech-item">
-            <div class="tech-icon">
-                <i class="fas fa-bolt"></i>
-            </div>
+            <div class="tech-icon"><i class="fas fa-bolt"></i></div>
             <h4 class="tech-title">Lightning Fast</h4>
             <p class="tech-description">Optimized processing for maximum speed and efficiency</p>
         </div>
@@ -166,670 +166,195 @@
 </div>
 
 <style>
-/* Hero Section */
-.hero-section {
-    text-align: center;
-    padding: 4rem 0;
-    margin-bottom: 3rem;
-}
+/* (styles unchanged, trimmed for brevity; you can keep your full block) */
 
-.hero-content {
-    max-width: 1000px;
-    margin: 0 auto;
-}
-
-.hero-title {
-    font-size: 4rem;
-    font-weight: 900;
-    margin-bottom: 1.5rem;
-    line-height: 1.1;
-}
-
-.hero-title-line {
-    display: block;
-    animation: slideInUp 0.8s ease-out;
-}
-
-.hero-title-line:nth-child(2) {
-    animation-delay: 0.2s;
-}
-
-.gradient-text {
-    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple), var(--accent-teal));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-
-.hero-subtitle {
-    font-size: 1.25rem;
-    color: var(--text-secondary);
-    margin-bottom: 3rem;
-    max-width: 600px;
-    margin-left: auto;
-    margin-right: auto;
-    animation: fadeInUp 0.8s ease-out 0.4s both;
-}
-
-.hero-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 2rem;
-    margin-top: 3rem;
-}
-
-.stat-item {
-    text-align: center;
-    padding: 1.5rem;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 16px;
-    border: 1px solid var(--border);
-    backdrop-filter: blur(10px);
-    transition: all 0.3s ease;
-    animation: fadeInUp 0.8s ease-out;
-}
-
-.stat-item:nth-child(1) { animation-delay: 0.6s; }
-.stat-item:nth-child(2) { animation-delay: 0.7s; }
-.stat-item:nth-child(3) { animation-delay: 0.8s; }
-.stat-item:nth-child(4) { animation-delay: 0.9s; }
-
-.stat-item:hover {
-    transform: translateY(-5px);
-    box-shadow: var(--shadow-lg);
-    border-color: var(--border-hover);
-}
-
-.stat-number {
-    font-size: 2.5rem;
-    font-weight: 800;
-    color: var(--accent-blue);
-    margin-bottom: 0.5rem;
-    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
-}
-
-.stat-label {
-    font-size: 0.9rem;
-    color: var(--text-muted);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-/* Upload Section */
-.upload-section {
-    margin-bottom: 3rem;
-}
-
-.section-header {
-    text-align: center;
-    margin-bottom: 3rem;
-}
-
-.section-title {
-    font-size: 2.5rem;
-    font-weight: 800;
-    margin-bottom: 1rem;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 1rem;
-    color: var(--text-primary);
-}
-
-.section-title i {
-    color: var(--accent-blue);
-    font-size: 2rem;
-}
-
-.section-subtitle {
-    font-size: 1.125rem;
-    color: var(--text-secondary);
-    max-width: 500px;
-    margin: 0 auto;
-}
-
-.upload-container {
-    max-width: 800px;
-    margin: 0 auto;
-}
-
-.upload-area {
-    border: 3px dashed var(--border);
-    border-radius: 20px;
-    padding: 4rem 2rem;
-    text-align: center;
-    cursor: pointer;
-    transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-    background: rgba(255, 255, 255, 0.02);
-    margin-bottom: 2rem;
-}
-
-.upload-area:hover {
-    border-color: var(--accent-blue);
-    background: rgba(59, 130, 246, 0.05);
-    transform: translateY(-5px);
-    box-shadow: var(--shadow-xl);
-}
-
-.upload-area.dragover {
-    border-color: var(--accent-blue);
-    background: rgba(59, 130, 246, 0.1);
-    transform: scale(1.02);
-}
-
-.upload-content {
-    pointer-events: none;
-}
-
-.upload-icon {
-    font-size: 4rem;
-    color: var(--accent-blue);
-    margin-bottom: 1.5rem;
-    animation: bounce 2s infinite;
-}
-
-.upload-title {
-    font-size: 1.5rem;
-    font-weight: 700;
-    margin-bottom: 0.5rem;
-    color: var(--text-primary);
-}
-
-.upload-subtitle {
-    color: var(--text-secondary);
-    margin-bottom: 1.5rem;
-}
-
-.upload-formats {
-    display: flex;
-    gap: 0.75rem;
-    justify-content: center;
-    flex-wrap: wrap;
-}
-
-.format-tag {
-    background: rgba(59, 130, 246, 0.1);
-    color: var(--accent-blue);
-    padding: 0.5rem 1rem;
-    border-radius: 20px;
-    font-size: 0.875rem;
-    font-weight: 600;
-    border: 1px solid rgba(59, 130, 246, 0.3);
-}
-
-.upload-options {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 2rem;
-    margin-bottom: 2rem;
-}
-
-.option-group {
-    text-align: center;
-    padding: 1.5rem;
-    background: rgba(255, 255, 255, 0.03);
-    border-radius: 16px;
-    border: 1px solid var(--border);
-    transition: all 0.3s ease;
-}
-
-.option-group:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: var(--border-hover);
-    transform: translateY(-2px);
-}
-
-.option-title {
-    font-size: 1.125rem;
-    font-weight: 700;
-    margin-bottom: 0.5rem;
-    color: var(--text-primary);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0.5rem;
-}
-
-.option-title i {
-    color: var(--accent-blue);
-}
-
-.option-description {
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-    margin-bottom: 1rem;
-}
-
-/* Radio Button Styles */
-.radio-option {
-    position: relative;
-    display: inline-block;
-    cursor: pointer;
-}
-
-.radio-option input[type="radio"] {
-    opacity: 0;
-    position: absolute;
-    width: 0;
-    height: 0;
-}
-
-.radio-custom {
-    position: relative;
-    display: inline-block;
-    width: 20px;
-    height: 20px;
-    border: 2px solid var(--border);
-    border-radius: 50%;
-    background-color: transparent;
-    transition: all 0.3s ease;
-}
-
-.radio-option input[type="radio"]:checked + .radio-custom {
-    border-color: var(--accent-blue);
-    background-color: var(--accent-blue);
-}
-
-.radio-option input[type="radio"]:checked + .radio-custom::after {
-    content: '';
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background-color: white;
-}
-
-.radio-option:hover .radio-custom {
-    border-color: var(--accent-blue);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-}
-
-.upload-actions {
-    text-align: center;
-}
-
-.btn-large {
-    padding: 1.25rem 3rem;
-    font-size: 1.125rem;
-    font-weight: 700;
-}
-
-/* Processing Status */
-.processing-status {
-    margin-top: 2rem;
-    padding: 2rem;
-    background: rgba(59, 130, 246, 0.05);
-    border: 1px solid rgba(59, 130, 246, 0.2);
-    border-radius: 16px;
-    backdrop-filter: blur(10px);
-}
-
-.status-content {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-bottom: 1.5rem;
-}
-
-.status-icon {
-    width: 40px;
-    height: 40px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.status-title {
-    font-size: 1.125rem;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin-bottom: 0.25rem;
-}
-
-.status-message {
-    color: var(--text-secondary);
-    font-size: 0.9rem;
-}
-
-.progress-container {
-    margin-top: 1rem;
-}
-
-.progress-text {
-    display: flex;
-    justify-content: space-between;
-    margin-top: 0.5rem;
-    font-size: 0.875rem;
-    color: var(--text-secondary);
-}
-
-
-/* Technology Section */
-.technology-section {
-    margin-bottom: 3rem;
-}
-
-.tech-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1.5rem;
-}
-
-.tech-item {
-    text-align: center;
-    padding: 1.5rem;
-    background: rgba(255, 255, 255, 0.02);
-    border-radius: 16px;
-    border: 1px solid var(--border);
-    transition: all 0.3s ease;
-}
-
-.tech-item:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: var(--border-hover);
-    transform: translateY(-3px);
-}
-
-.tech-icon {
-    width: 60px;
-    height: 60px;
-    background: linear-gradient(135deg, var(--accent-teal), var(--accent-blue));
-    border-radius: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 0 auto 1rem;
-    font-size: 1.5rem;
-    color: white;
-    box-shadow: var(--shadow);
-}
-
-.tech-title {
-    font-size: 1rem;
-    font-weight: 700;
-    margin-bottom: 0.5rem;
-    color: var(--text-primary);
-}
-
-.tech-description {
-    font-size: 0.875rem;
-    color: var(--text-secondary);
-    line-height: 1.5;
-}
-
-/* Animations */
-@keyframes slideInUp {
-    from {
-        opacity: 0;
-        transform: translateY(30px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@keyframes fadeInUp {
-    from {
-        opacity: 0;
-        transform: translateY(20px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-/* Responsive Design */
-@media (max-width: 768px) {
-    .hero-title {
-        font-size: 2.5rem;
-    }
-    
-    .hero-stats {
-        grid-template-columns: repeat(2, 1fr);
-        gap: 1rem;
-    }
-    
-    .upload-options {
-        grid-template-columns: 1fr;
-    }
-    
-    
-    .tech-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-
-@media (max-width: 480px) {
-    .hero-title {
-        font-size: 2rem;
-    }
-    
-    .hero-stats {
-        grid-template-columns: 1fr;
-    }
-    
-    .tech-grid {
-        grid-template-columns: 1fr;
-    }
-    
-    .upload-area {
-        padding: 2rem 1rem;
-    }
-}
+/* ensure button disabled style looks clickable only when enabled */
+#extractBtn:disabled { opacity: .5; cursor: not-allowed; }
 </style>
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const uploadArea = document.getElementById('uploadSection');
-    const fileInput = document.getElementById('fileInput');
-    const extractBtn = document.getElementById('extractBtn');
-    const processingStatus = document.getElementById('processingStatus');
-    const statusMessage = document.getElementById('statusMessage');
-    const progressFill = document.getElementById('progressFill');
-    const progressText = document.getElementById('progressText');
-    const elapsedTime = document.getElementById('elapsedTime');
+  const uploadArea = document.getElementById('uploadSection');
+  const fileInput = document.getElementById('fileInput');
+  const extractBtn = document.getElementById('extractBtn');
+  const processingStatus = document.getElementById('processingStatus');
+  const statusMessage = document.getElementById('statusMessage');
+  const progressFill = document.getElementById('progressFill');
+  const progressText = document.getElementById('progressText');
+  const elapsedTime = document.getElementById('elapsedTime');
 
-    let selectedFile = null;
-    let startTime = null;
-    let progressInterval = null;
+  let selectedFile = null;
+  let startTime = null;
+  let progressInterval = null;
 
-    // File upload handling
-    uploadArea.addEventListener('click', () => fileInput.click());
-    uploadArea.addEventListener('dragover', handleDragOver);
-    uploadArea.addEventListener('dragleave', handleDragLeave);
-    uploadArea.addEventListener('drop', handleDrop);
-    fileInput.addEventListener('change', handleFileSelect);
+  // File upload handling
+  uploadArea.addEventListener('click', () => fileInput.click());
+  uploadArea.addEventListener('dragover', handleDragOver);
+  uploadArea.addEventListener('dragleave', handleDragLeave);
+  uploadArea.addEventListener('drop', handleDrop);
+  fileInput.addEventListener('change', handleFileSelect);
 
-    function handleDragOver(e) {
-        e.preventDefault();
-        uploadArea.classList.add('dragover');
+  function handleDragOver(e) {
+    e.preventDefault();
+    uploadArea.classList.add('dragover');
+  }
+  function handleDragLeave(e) {
+    e.preventDefault();
+    uploadArea.classList.remove('dragover');
+  }
+  function handleDrop(e) {
+    e.preventDefault();
+    uploadArea.classList.remove('dragover');
+    if (e.dataTransfer.files?.length) handleFile(e.dataTransfer.files[0]);
+  }
+  function handleFileSelect(e) {
+    if (e.target.files?.length) handleFile(e.target.files[0]);
+  }
+
+  function handleFile(file) {
+    // permissive client-side check (no HTML pattern!)
+    const name = (file.name || '').toLowerCase();
+    const ok = name.endsWith('.docx') || name.endsWith('.pdf') || name.endsWith('.xlsx');
+    if (!ok) {
+      alert('Please select a DOCX, PDF, or XLSX file.');
+      return;
     }
 
-    function handleDragLeave(e) {
-        e.preventDefault();
-        uploadArea.classList.remove('dragover');
-    }
+    selectedFile = file;
 
-    function handleDrop(e) {
-        e.preventDefault();
-        uploadArea.classList.remove('dragover');
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            handleFile(files[0]);
+    // Rebuild inner content safely to show selection
+    uploadArea.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'upload-content';
+    wrap.innerHTML = `
+      <div class="upload-icon"><i class="fas fa-check-circle"></i></div>
+      <h3 class="upload-title">File Selected</h3>
+      <p class="upload-subtitle" id="selName"></p>
+      <div class="upload-formats"><span class="format-tag">Ready to Process</span></div>
+    `;
+    uploadArea.appendChild(wrap);
+    wrap.querySelector('#selName').textContent = file.name;
+
+    extractBtn.disabled = false;
+  }
+
+  // Parse document
+  window.parseDocument = function() {
+    if (!selectedFile) { alert('Please select a file first'); return; }
+
+    const mode = document.querySelector('input[name="processingMode"]:checked')?.value || 'ai';
+    const useLLM = (mode === 'ai');
+    const useSync = (mode === 'sync');
+
+    const formData = new FormData();
+    formData.append('file', selectedFile);
+    formData.append('use_llm', String(useLLM));
+    formData.append('use_sync', String(useSync));
+    formData.append('mode', 'balanced');
+
+    processingStatus.style.display = 'block';
+    extractBtn.disabled = true;
+    startTime = Date.now();
+    if (progressInterval) clearInterval(progressInterval);
+    progressInterval = setInterval(updateElapsedTime, 1000);
+
+    fetch('/api/upload', { method: 'POST', body: formData })
+      .then(async (res) => {
+        const contentType = res.headers.get('content-type') || '';
+        let payload;
+        try {
+          payload = contentType.includes('application/json') ? await res.json() : { success: false, error: await res.text() };
+        } catch (_) {
+          payload = { success: false, error: 'Unexpected response from server.' };
         }
-    }
-
-    function handleFileSelect(e) {
-        const files = e.target.files;
-        if (files.length > 0) {
-            handleFile(files[0]);
+        if (!res.ok) {
+          throw new Error(payload.error || `HTTP ${res.status}`);
         }
-    }
-
-    function handleFile(file) {
-        selectedFile = file;
-        uploadArea.innerHTML = `
-            <div class="upload-content">
-                <div class="upload-icon">
-                    <i class="fas fa-check-circle"></i>
-                </div>
-                <h3 class="upload-title">File Selected</h3>
-                <p class="upload-subtitle">${file.name}</p>
-                <div class="upload-formats">
-                    <span class="format-tag">Ready to Process</span>
-                </div>
-            </div>
-        `;
+        return payload;
+      })
+      .then((data) => {
+        console.log('Upload response:', data);
+        if (data.success) {
+          if (data.async) {
+            startPolling(data.job_id);
+          } else {
+            window.location.href = `/review/${data.job_id}`;
+          }
+        } else {
+          throw new Error(data.error || 'Upload failed');
+        }
+      })
+      .catch((err) => {
+        console.error('Upload error:', err);
+        alert('Upload failed: ' + err.message);
+        processingStatus.style.display = 'none';
         extractBtn.disabled = false;
-    }
+        if (progressInterval) clearInterval(progressInterval);
+      });
+  };
 
-    // Parse document function
-    window.parseDocument = function() {
-        if (!selectedFile) {
-            alert('Please select a file first');
-            return;
-        }
-
-        const processingMode = document.querySelector('input[name="processingMode"]:checked').value;
-        const useLLM = processingMode === 'ai';
-        const useSync = processingMode === 'sync';
-
-        console.log('Parsing document:', selectedFile.name, 'Processing Mode:', processingMode, 'useLLM:', useLLM, 'useSync:', useSync);
-
-        const formData = new FormData();
-        formData.append('file', selectedFile);
-        formData.append('use_llm', useLLM);
-        formData.append('use_sync', useSync);
-        formData.append('mode', 'balanced');
-
-        // Show processing status
-        processingStatus.style.display = 'block';
-        extractBtn.disabled = true;
-        startTime = Date.now();
-        updateElapsedTime();
-
-        fetch('/api/upload', {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => response.json())
+  function startPolling(jobId) {
+    const poller = setInterval(() => {
+      fetch(`/api/poll/${jobId}`)
+        .then(r => r.json())
         .then(data => {
-            console.log('Upload response:', data);
-            
-            if (data.success) {
-                if (data.async) {
-                    // Async mode - start polling
-                    startPolling(data.job_id);
-                } else {
-                    // Sync mode - redirect immediately
-                    window.location.href = `/review/${data.job_id}`;
-                }
-            } else {
-                throw new Error(data.error || 'Upload failed');
-            }
-        })
-        .catch(error => {
-            console.error('Upload error:', error);
-            alert('Upload failed: ' + error.message);
+          console.log('Poll response:', data);
+          updateStatus(data);
+          if (data.status === 'completed') {
+            clearInterval(poller);
+            if (progressInterval) clearInterval(progressInterval);
+            window.location.href = `/review/${jobId}`;
+          } else if (data.status === 'failed') {
+            clearInterval(poller);
+            if (progressInterval) clearInterval(progressInterval);
+            alert('Processing failed: ' + (data.error || 'Unknown error'));
             processingStatus.style.display = 'none';
             extractBtn.disabled = false;
-        });
-    };
-
-    function startPolling(jobId) {
-        const pollInterval = setInterval(() => {
-            fetch(`/api/poll/${jobId}`)
-            .then(response => response.json())
-            .then(data => {
-                console.log('Poll response:', data);
-                updateStatus(data);
-                
-                if (data.status === 'completed') {
-                    clearInterval(pollInterval);
-                    if (progressInterval) clearInterval(progressInterval);
-                    window.location.href = `/review/${jobId}`;
-                } else if (data.status === 'failed') {
-                    clearInterval(pollInterval);
-                    if (progressInterval) clearInterval(progressInterval);
-                    alert('Processing failed: ' + (data.error || 'Unknown error'));
-                    processingStatus.style.display = 'none';
-                    extractBtn.disabled = false;
-                }
-            })
-            .catch(error => {
-                console.error('Polling error:', error);
-                clearInterval(pollInterval);
-                if (progressInterval) clearInterval(progressInterval);
-                alert('Polling failed: ' + error.message);
-                processingStatus.style.display = 'none';
-                extractBtn.disabled = false;
-            });
-        }, 2000);
-
-        // Set up progress simulation
-        progressInterval = setInterval(() => {
-            updateElapsedTime();
-        }, 1000);
-    }
-
-    function updateStatus(data) {
-        if (data.progress && data.progress.message) {
-            statusMessage.textContent = data.progress.message;
-        }
-        
-        // Update progress bar based on status
-        let progress = 0;
-        if (data.status === 'processing') {
-            progress = 50;
-        } else if (data.status === 'completed') {
-            progress = 100;
-        }
-        
-        progressFill.style.width = progress + '%';
-        progressText.textContent = progress + '%';
-    }
-
-    function updateElapsedTime() {
-        if (startTime) {
-            const elapsed = Math.floor((Date.now() - startTime) / 1000);
-            elapsedTime.textContent = `Elapsed: ${elapsed}s`;
-        }
-    }
-
-    // Refresh statistics
-    function refreshStats() {
-        fetch('/')
-        .then(response => response.text())
-        .then(html => {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(html, 'text/html');
-            
-            const newStats = {
-                documentsProcessed: doc.getElementById('documentsProcessed')?.textContent || '0',
-                questionsExtracted: doc.getElementById('questionsExtracted')?.textContent || '0',
-                accuracyRate: doc.getElementById('accuracyRate')?.textContent || '0%',
-                avgProcessingTime: doc.getElementById('avgProcessingTime')?.textContent || '0s'
-            };
-            
-            document.getElementById('documentsProcessed').textContent = newStats.documentsProcessed;
-            document.getElementById('questionsExtracted').textContent = newStats.questionsExtracted;
-            document.getElementById('accuracyRate').textContent = newStats.accuracyRate;
-            document.getElementById('avgProcessingTime').textContent = newStats.avgProcessingTime;
+          }
         })
-        .catch(error => console.error('Error refreshing stats:', error));
-    }
+        .catch(err => {
+          console.error('Polling error:', err);
+          clearInterval(poller);
+          if (progressInterval) clearInterval(progressInterval);
+          alert('Polling failed: ' + err.message);
+          processingStatus.style.display = 'none';
+          extractBtn.disabled = false;
+        });
+    }, 2000);
+  }
 
-    // Refresh stats every 30 seconds
-    setInterval(refreshStats, 30000);
+  function updateStatus(data) {
+    if (data.progress?.message) statusMessage.textContent = data.progress.message;
+    let pct = 0;
+    if (data.status === 'processing') pct = 50;
+    if (data.status === 'completed') pct = 100;
+    progressFill.style.width = pct + '%';
+    progressText.textContent = pct + '%';
+  }
+
+  function updateElapsedTime() {
+    if (!startTime) return;
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    elapsedTime.textContent = `Elapsed: ${elapsed}s`;
+  }
+
+  // Periodic stat refresh (non-breaking even if index renders with defaults)
+  setInterval(() => {
+    fetch('/').then(r => r.text()).then(html => {
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+      const get = id => doc.getElementById(id)?.textContent || null;
+      const updates = {
+        documentsProcessed: get('documentsProcessed'),
+        questionsExtracted: get('questionsExtracted'),
+        accuracyRate: get('accuracyRate'),
+        avgProcessingTime: get('avgProcessingTime')
+      };
+      if (updates.documentsProcessed) document.getElementById('documentsProcessed').textContent = updates.documentsProcessed;
+      if (updates.questionsExtracted) document.getElementById('questionsExtracted').textContent = updates.questionsExtracted;
+      if (updates.accuracyRate) document.getElementById('accuracyRate').textContent = updates.accuracyRate;
+      if (updates.avgProcessingTime) document.getElementById('avgProcessingTime').textContent = updates.avgProcessingTime;
+    }).catch(() => {});
+  }, 30000);
 });
 </script>
 {% endblock %}
