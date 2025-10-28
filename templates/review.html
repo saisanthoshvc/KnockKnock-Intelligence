@@ -1,0 +1,443 @@
+{% extends "base.html" %}
+
+{% block title %}Review & Edit - KnockKnock Intelligence{% endblock %}
+
+{% block content %}
+<div class="review-header">
+    <div class="header-content">
+        <div class="header-left">
+            <h1 class="page-title">
+                <i class="fas fa-edit"></i>
+                Review & Edit Questions
+            </h1>
+            <p class="page-subtitle">Review, edit, and export your extracted RFP questions</p>
+        </div>
+        <div class="header-actions">
+            <a href="{{ url_for('index') }}" class="btn btn-secondary">
+                <i class="fas fa-arrow-left"></i>
+                Back to Upload
+            </a>
+        </div>
+    </div>
+</div>
+
+<!-- Metrics Dashboard -->
+<div class="card metrics-dashboard">
+    <div class="metrics-grid">
+        <div class="metric-card">
+            <div class="metric-icon">
+                <i class="fas fa-list"></i>
+            </div>
+            <div class="metric-content">
+                <div class="metric-value" id="totalRows">{{ questions|length }}</div>
+                <div class="metric-label">Total Questions</div>
+            </div>
+        </div>
+        
+        <div class="metric-card">
+            <div class="metric-icon">
+                <i class="fas fa-tags"></i>
+            </div>
+            <div class="metric-content">
+                <div class="metric-value" id="distinctTypes">{{ questions|map(attribute='type')|unique|list|length }}</div>
+                <div class="metric-label">Question Types</div>
+            </div>
+        </div>
+        
+        <div class="metric-card">
+            <div class="metric-icon">
+                <i class="fas fa-chart-line"></i>
+            </div>
+            <div class="metric-content">
+                <div class="metric-value" id="avgConfidence">{{ "%.1f"|format((questions|map(attribute='confidence')|list|sum / questions|length * 100) if questions else 0) }}%</div>
+                <div class="metric-label">Avg Confidence</div>
+            </div>
+        </div>
+        
+        <div class="metric-card">
+            <div class="metric-icon">
+                <i class="fas fa-check-circle"></i>
+            </div>
+            <div class="metric-content">
+                <div class="metric-value" id="approvedCount">0</div>
+                <div class="metric-label">Approved</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Filters and Controls -->
+<div class="card filters-section">
+    <div class="filters-header">
+        <h3 class="filters-title">
+            <i class="fas fa-filter"></i>
+            Filters & Controls
+        </h3>
+        <div class="filters-actions">
+            <button class="btn btn-success" onclick="saveAllEdits()">
+                <i class="fas fa-save"></i>
+                Save All Changes
+            </button>
+            <button class="btn btn-secondary" onclick="clearFilters()">
+                <i class="fas fa-times"></i>
+                Clear Filters
+            </button>
+            <button class="btn btn-primary" onclick="exportData()">
+                <i class="fas fa-download"></i>
+                Export Results
+            </button>
+        </div>
+    </div>
+    
+    <div class="filters-grid">
+        <div class="filter-group">
+            <label class="filter-label">Min Confidence</label>
+            <div class="confidence-slider">
+                <input type="range" id="confidenceSlider" min="0" max="100" value="0" class="slider">
+                <div class="slider-value" id="confidenceValue">0%</div>
+            </div>
+        </div>
+        
+        <div class="filter-group">
+            <label class="filter-label">Question Type</label>
+            <select id="typeFilter" class="filter-select">
+                <option value="">All Types</option>
+                {% for type in questions|map(attribute='type')|unique|list %}
+                <option value="{{ type }}">{{ type|title }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        
+        <div class="filter-group">
+            <label class="filter-label">Search</label>
+            <div class="search-input">
+                <i class="fas fa-search"></i>
+                <input type="text" id="searchInput" placeholder="Search questions...">
+            </div>
+        </div>
+        
+        <div class="filter-group">
+            <label class="filter-label">Status</label>
+            <select id="statusFilter" class="filter-select">
+                <option value="">All Status</option>
+                <option value="approved">Approved</option>
+                <option value="pending">Pending</option>
+                <option value="rejected">Rejected</option>
+            </select>
+        </div>
+    </div>
+</div>
+
+<!-- Questions Table -->
+<div class="card questions-section">
+    <div class="table-header">
+        <h3 class="table-title">
+            <i class="fas fa-table"></i>
+            Questions Table
+        </h3>
+        <div class="table-actions">
+            <button class="btn btn-secondary" onclick="selectAll()">
+                <i class="fas fa-check-square"></i>
+                Select All
+            </button>
+        </div>
+    </div>
+    
+    <div class="table-container">
+        <table class="questions-table" id="questionsTable">
+            <thead>
+                <tr>
+                    <th class="checkbox-col"><input type="checkbox" id="selectAllCheckbox" onchange="toggleSelectAll()"></th>
+                    <th class="question-col">Question</th>
+                    <th class="confidence-col">Confidence</th>
+                    <th class="type-col">Type</th>
+                    <th class="status-col">Status</th>
+                    <th class="actions-col">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for question in questions %}
+                <tr class="question-row" data-question-id="{{ question.qid }}">
+                    <td class="checkbox-col"><input type="checkbox" class="row-checkbox" value="{{ question.qid }}"></td>
+                    <td class="question-col">
+                        <div class="question-content">
+                            <textarea class="question-text" data-field="text" data-qid="{{ question.qid }}">{{ question.text }}</textarea>
+                        </div>
+                    </td>
+                    <td class="confidence-col">
+                        <div class="confidence-display">
+                            <input type="number" class="confidence-input" data-field="confidence" data-qid="{{ question.qid }}" value="{{ question.confidence }}" min="0" max="1" step="0.01">
+                            <div class="confidence-bar"><div class="confidence-fill" style="width: {{ question.confidence * 100 }}%"></div></div>
+                        </div>
+                    </td>
+                    <td class="type-col"><span class="type-badge type-{{ question.type }}">{{ question.type }}</span></td>
+                    <td class="status-col">
+                        <select class="status-select" data-field="status" data-qid="{{ question.qid }}">
+                            <option value="pending">Pending</option>
+                            <option value="approved">Approved</option>
+                            <option value="rejected">Rejected</option>
+                        </select>
+                    </td>
+                    <td class="actions-col">
+                        <div class="action-buttons">
+                            <button class="btn-icon btn-save" onclick="saveRow('{{ question.qid }}')" title="Save"><i class="fas fa-save"></i></button>
+                            <button class="btn-icon btn-delete" onclick="deleteRow('{{ question.qid }}')" title="Delete"><i class="fas fa-trash"></i></button>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Export Modal -->
+<div class="modal" id="exportModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 class="modal-title"><i class="fas fa-download"></i> Export Options</h3>
+            <button class="modal-close" onclick="closeExportModal()"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="modal-body">
+            <div class="export-options">
+                <div class="export-format">
+                    <h4>Export Format</h4>
+                    <div class="format-options">
+                        <label class="format-option">
+                            <input type="radio" name="format" value="docx" checked>
+                            <span class="format-label"><i class="fas fa-file-word"></i> DOCX</span>
+                        </label>
+                        <label class="format-option">
+                            <input type="radio" name="format" value="xlsx">
+                            <span class="format-label"><i class="fas fa-file-excel"></i> Excel</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="export-filters">
+                    <h4>Export Filters</h4>
+                    <div class="filter-options">
+                        <label class="filter-option"><input type="checkbox" id="exportApproved" checked><span>Approved Questions Only</span></label>
+                        <label class="filter-option"><input type="checkbox" id="exportHighConfidence"><span>High Confidence Only (>80%)</span></label>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeExportModal()">Cancel</button>
+            <button class="btn btn-primary" onclick="confirmExport()"><i class="fas fa-download"></i> Export</button>
+        </div>
+    </div>
+</div>
+
+<style>
+/* (Your original review styles can remain; omitted for brevity) */
+</style>
+
+<script>
+// Job-scoped URLs for this page
+const JOB_ID = "{{ job_id }}";
+const URLS = {
+  saveEdits: "{{ url_for('save_edits', job_id=job_id) }}",
+  exportDocx: "{{ url_for('export_data', job_id=job_id, format='docx') }}",
+  exportXlsx: "{{ url_for('export_data', job_id=job_id, format='xlsx') }}"
+};
+
+document.addEventListener('DOMContentLoaded', function() {
+    initializeFilters();
+    initializeTable();
+    updateMetrics();
+});
+
+function initializeFilters() {
+    const confidenceSlider = document.getElementById('confidenceSlider');
+    const confidenceValue = document.getElementById('confidenceValue');
+    const typeFilter = document.getElementById('typeFilter');
+    const searchInput = document.getElementById('searchInput');
+    const statusFilter = document.getElementById('statusFilter');
+    confidenceSlider.addEventListener('input', function() {
+        const value = this.value;
+        confidenceValue.textContent = value + '%';
+        filterTable();
+    });
+    typeFilter.addEventListener('change', filterTable);
+    searchInput.addEventListener('input', debounce(filterTable, 300));
+    statusFilter.addEventListener('change', filterTable);
+}
+
+function initializeTable() {
+    document.querySelectorAll('.question-text, .confidence-input, .status-select').forEach(field => {
+        field.addEventListener('change', function() {
+            const row = this.closest('.question-row');
+            row.classList.add('modified');
+        });
+    });
+}
+
+function filterTable() {
+    const confidenceThreshold = parseInt(document.getElementById('confidenceSlider').value) / 100;
+    const typeFilter = document.getElementById('typeFilter').value;
+    const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+    const statusFilter = document.getElementById('statusFilter').value;
+    const rows = document.querySelectorAll('.question-row');
+    rows.forEach(row => {
+        const confidence = parseFloat(row.querySelector('.confidence-input').value);
+        const type = row.querySelector('.type-badge').textContent.toLowerCase();
+        const questionText = row.querySelector('.question-text').value.toLowerCase();
+        const status = row.querySelector('.status-select').value;
+        let show = true;
+        if (confidence < confidenceThreshold) show = false;
+        if (typeFilter && type !== typeFilter.toLowerCase()) show = false;
+        if (searchTerm && !questionText.includes(searchTerm)) show = false;
+        if (statusFilter && status !== statusFilter) show = false;
+        row.style.display = show ? '' : 'none';
+    });
+}
+
+function clearFilters() {
+    document.getElementById('confidenceSlider').value = 0;
+    document.getElementById('confidenceValue').textContent = '0%';
+    document.getElementById('typeFilter').value = '';
+    document.getElementById('searchInput').value = '';
+    document.getElementById('statusFilter').value = '';
+    document.querySelectorAll('.question-row').forEach(row => { row.style.display = ''; });
+}
+
+function toggleSelectAll() {
+    const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+    const rowCheckboxes = document.querySelectorAll('.row-checkbox');
+    rowCheckboxes.forEach(checkbox => { checkbox.checked = selectAllCheckbox.checked; });
+}
+
+function selectAll() {
+    document.getElementById('selectAllCheckbox').checked = true;
+    toggleSelectAll();
+}
+
+function getSelectedRows() {
+    const selectedCheckboxes = document.querySelectorAll('.row-checkbox:checked');
+    return Array.from(selectedCheckboxes).map(checkbox => checkbox.closest('.question-row'));
+}
+
+function saveRow(qid) {
+    const row = document.querySelector(`[data-question-id="${qid}"]`);
+    const questionData = {
+        qid: qid,
+        text: row.querySelector('.question-text').value,
+        confidence: parseFloat(row.querySelector('.confidence-input').value),
+        status: row.querySelector('.status-select').value
+    };
+    fetch(URLS.saveEdits, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questions: [questionData] })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            row.classList.remove('modified');
+            showNotification('Question saved successfully', 'success');
+        } else {
+            showNotification('Failed to save question', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Save error:', error);
+        showNotification('Error saving question', 'error');
+    });
+}
+
+function saveAllEdits() {
+    const modifiedRows = document.querySelectorAll('.question-row.modified');
+    if (modifiedRows.length === 0) { showNotification('No changes to save', 'info'); return; }
+    const questions = [];
+    modifiedRows.forEach(row => {
+        const questionData = {
+            qid: row.dataset.questionId,
+            text: row.querySelector('.question-text').value,
+            confidence: parseFloat(row.querySelector('.confidence-input').value),
+            status: row.querySelector('.status-select').value
+        };
+        questions.append = null;
+        questions.push(questionData);
+    });
+    fetch(URLS.saveEdits, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ questions })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            modifiedRows.forEach(row => row.classList.remove('modified'));
+            showNotification(`✅ Saved ${questions.length} questions successfully!`, 'success');
+        } else {
+            showNotification('❌ Failed to save questions', 'error');
+        }
+    })
+    .catch(error => {
+        console.error('Save error:', error);
+        showNotification('❌ Error saving questions: ' + error.message, 'error');
+    });
+}
+
+function deleteRow(qid) {
+    if (confirm('Are you sure you want to delete this question?')) {
+        const row = document.querySelector(`[data-question-id="${qid}"]`);
+        if (row) row.remove();
+        updateMetrics();
+        showNotification('Question deleted locally. Save to persist changes.', 'info');
+    }
+}
+
+function exportData() { document.getElementById('exportModal').classList.add('show'); }
+function closeExportModal() { document.getElementById('exportModal').classList.remove('show'); }
+
+function confirmExport() {
+    const format = document.querySelector('input[name="format"]:checked').value;
+    const approvedOnly = document.getElementById('exportApproved').checked;
+    const highConfidenceOnly = document.getElementById('exportHighConfidence').checked;
+    let url = (format === 'docx') ? URLS.exportDocx : URLS.exportXlsx;
+    const qs = new URLSearchParams();
+    if (approvedOnly) qs.set('approved', 'true');
+    if (highConfidenceOnly) qs.set('high_confidence', 'true');
+    if ([...qs].length) url += `?${qs.toString()}`;
+    const link = document.createElement('a');
+    link.href = url;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    closeExportModal();
+    showNotification(`Export completed! ${format.toUpperCase()} file downloaded.`, 'success');
+}
+
+function updateMetrics() {
+    const totalRows = document.querySelectorAll('.question-row').length;
+    const approvedCount = Array.from(document.querySelectorAll('.status-select'))
+        .filter(sel => sel.value === 'approved').length;
+    document.getElementById('totalRows').textContent = totalRows;
+    document.getElementById('approvedCount').textContent = approvedCount;
+}
+
+function showNotification(message, type) {
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.textContent = message;
+    document.body.appendChild(notification);
+    setTimeout(() => { notification.classList.add('show'); }, 100);
+    setTimeout(() => {
+        notification.classList.remove('show');
+        setTimeout(() => { document.body.removeChild(notification); }, 300);
+    }, 3000);
+}
+
+function debounce(func, wait) {
+    let timeout;
+    return function executedFunction(...args) {
+        const later = () => { clearTimeout(timeout); func(...args); };
+        clearTimeout(timeout);
+        timeout = setTimeout(later, wait);
+    };
+}
+</script>
+{% endblock %}
