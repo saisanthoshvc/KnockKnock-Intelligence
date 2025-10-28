@@ -1,86 +1,75 @@
-import os, json, time, io, csv
+import os
+import json
+import time
+import requests
 from datetime import datetime, timedelta
 from flask import Flask, render_template, request, jsonify, redirect, url_for, send_file
 from werkzeug.utils import secure_filename
-import requests
-import logging
+import io
 
-# -----------------------------------------------------------------------------
-# App
-# -----------------------------------------------------------------------------
-app = Flask(__name__, template_folder="templates")
+app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'your-secret-key-here')
 
-# -----------------------------------------------------------------------------
-# Logging (JSON lines so they show nicely in Posit Connect logs)
-# -----------------------------------------------------------------------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-
-def jlog(**kwargs):
-    try:
-        logging.info(json.dumps(kwargs))
-    except Exception:
-        logging.info(str(kwargs))
-
-# -----------------------------------------------------------------------------
-# Paths (use /tmp on Posit Connect)
-# -----------------------------------------------------------------------------
+# ---------- Paths (use /tmp on Posit Connect) ----------
 UPLOAD_FOLDER = os.environ.get('UPLOAD_DIR', '/tmp/knockknock_uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 STATS_FILE = os.environ.get('STATS_FILE', '/tmp/knockknock_stats.json')
 
-# -----------------------------------------------------------------------------
-# Allowed uploads
-# -----------------------------------------------------------------------------
+# ---------- Allowed uploads ----------
 ALLOWED_EXTENSIONS = {'docx', 'pdf', 'xlsx'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
 
-# -----------------------------------------------------------------------------
-# Env helpers
-# -----------------------------------------------------------------------------
+# ---------- API Config (env-first) ----------
 def env_int(name, default):
     try:
         return int(os.environ.get(name, default))
     except Exception:
         return default
 
-# -----------------------------------------------------------------------------
-# API Config (env-first)
-# -----------------------------------------------------------------------------
-api_config = {
+DEFAULT_API_CONFIG = {
     'base_url': os.environ.get(
         'RFP_API_URL',
         'https://connect.affiniusaiplatform.com/content/000d3572-937a-4d5c-ab7e-7ec80d80c4ce/'
     ),
-    'api_key': os.environ.get('RFP_API_KEY', ''),                         # <- set in Connect (or blank if public)
+    'api_key': os.environ.get('RFP_API_KEY', ''),
     'header_name': os.environ.get('RFP_API_KEY_HEADER_NAME', 'Authorization'),
-    'auth_scheme': os.environ.get('RFP_API_AUTH_SCHEME', 'Key'),          # Key | Bearer | Raw
+    'auth_scheme': os.environ.get('RFP_API_AUTH_SCHEME', 'Key'),  # Key | Bearer | Raw
     'poll_interval': env_int('POLL_INTERVAL_SECONDS', 2),
     'poll_timeout': env_int('POLL_TIMEOUT_SECONDS', 240),
     'request_timeout': env_int('REQUEST_TIMEOUT_SECONDS', 60),
 }
 
-# -----------------------------------------------------------------------------
-# In-memory state
-# -----------------------------------------------------------------------------
+api_config = DEFAULT_API_CONFIG.copy()
+
+# ---------- Simple logging helper ----------
+def log_event(event, **kv):
+    try:
+        print(json.dumps({"event": event, **kv}))
+    except Exception:
+        print(f"[{event}] {kv}")
+
+# ---------- In-memory state ----------
 job_data = {}
 job_edits = {}
 
-# -----------------------------------------------------------------------------
-# Stats helpers
-# -----------------------------------------------------------------------------
+# ---------- Stats helpers ----------
 def load_stats():
     try:
         if os.path.exists(STATS_FILE):
             with open(STATS_FILE, 'r') as f:
                 stats = json.load(f)
             docs = stats.get("documents_processed", 0)
-            stats["avg_processing_time"] = round(stats.get("total_processing_time", 0) / docs, 1) if docs else 0.0
+            if docs > 0:
+                stats["avg_processing_time"] = round(
+                    stats.get("total_processing_time", 0) / docs, 1
+                )
+            else:
+                stats["avg_processing_time"] = 0.0
             return stats
-    except Exception as e:
-        jlog(event="STATS_LOAD_ERROR", error=str(e))
+    except Exception:
+        pass
     return {
         "documents_processed": 0,
         "questions_extracted": 0,
@@ -96,7 +85,7 @@ def save_stats(stats):
         with open(STATS_FILE, 'w') as f:
             json.dump(stats, f, indent=2)
     except Exception as e:
-        jlog(event="STATS_SAVE_ERROR", error=str(e))
+        log_event("STATS_SAVE_ERROR", error=str(e))
 
 def update_stats(questions_count, processing_time, questions_data=None):
     stats = load_stats()
@@ -105,59 +94,64 @@ def update_stats(questions_count, processing_time, questions_data=None):
     stats["total_processing_time"] += processing_time
 
     if questions_count > 0 and questions_data:
-        total_conf, n = 0.0, 0
+        total_conf = 0.0
+        n = 0
         for q in questions_data:
             c = q.get('confidence')
             if isinstance(c, (int, float)):
-                total_conf += float(c); n += 1
-        if n:
-            stats["accuracy_rate"] = round((total_conf / n) * 100, 1)
-        elif stats.get("accuracy_rate", 0) == 0:
-            stats["accuracy_rate"] = 85.0
+                total_conf += float(c)
+                n += 1
+        stats["accuracy_rate"] = round((total_conf / n) * 100, 1) if n else stats.get("accuracy_rate", 85.0)
     else:
-        if stats.get("accuracy_rate", 0) == 0:
-            stats["accuracy_rate"] = 85.0
+        stats["accuracy_rate"] = max(stats.get("accuracy_rate", 0.0), 85.0)
 
     save_stats(stats)
     return stats
 
-# -----------------------------------------------------------------------------
-# Utilities
-# -----------------------------------------------------------------------------
+# ---------- Utilities ----------
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def get_auth_header():
-    """Build auth header according to env."""
+    """
+    Build auth header according to env:
+      - Authorization: Key <token>     (Posit Connect programmatic access)
+      - Authorization: Bearer <token>  (if your service expects bearer)
+      - <custom-name>: <token>         (Raw custom header)
+    """
     hdr = api_config['header_name']
     scheme = api_config['auth_scheme'].lower()
     token = api_config['api_key']
 
     if not token:
-        # allow unauthenticated if target is public (login not required)
-        return {}
+        return {}  # allow unauthenticated if target is public (login not required)
 
     if hdr.lower() == 'authorization':
         if scheme == 'key':
             return {'Authorization': f'Key {token}'}
-        if scheme == 'bearer':
+        elif scheme == 'bearer':
             return {'Authorization': f'Bearer {token}'}
-        if scheme == 'raw':
+        elif scheme == 'raw':
             return {'Authorization': token}
-        return {'Authorization': token}
+        else:
+            return {'Authorization': token}
     else:
+        # custom header name
         if scheme == 'raw':
             return {hdr: token}
-        if scheme in ('key', 'bearer'):
-            return {hdr: f'{scheme.title()} {token}'}
-        return {hdr: token}
+        elif scheme in ('key', 'bearer'):
+            scheme_title = scheme.title()
+            return {hdr: f'{scheme_title} {token}'}
+        else:
+            return {hdr: token}
 
 def make_api_request(method, endpoint, **kwargs):
     url = f"{api_config['base_url'].rstrip('/')}/{endpoint.lstrip('/')}"
     headers = get_auth_header()
     headers.update(kwargs.pop('headers', {}))
 
-    jlog(event="API_REQUEST_OUT", method=method, url=url, header_name=list(headers.keys())[0] if headers else None)
+    log_event("API_REQUEST_OUT", method=method.upper(), url=url, header_name=api_config['header_name'])
+
     try:
         if method.upper() == 'GET':
             resp = requests.get(url, headers=headers, timeout=api_config['request_timeout'])
@@ -173,84 +167,71 @@ def make_api_request(method, endpoint, **kwargs):
         if ('text/html' in ct) and ('__login__' in resp.text.lower() or '<title>sign in' in resp.text.lower()):
             class Dummy:
                 status_code = 401
-                text = "Not authorized: redirected to login page. Check RFP_API_* env vars."
+                text = "Not authorized: redirected to login page. Check RFP_API_KEY_* env vars."
                 def json(self): return {"error": self.text}
-            jlog(event="API_REQUEST_DONE", url=url, status_code=401, redirected_to_login=True)
+            log_event("API_REQUEST_DONE", url=url, status_code=401)
             return Dummy()
 
-        jlog(event="API_REQUEST_DONE", url=url, status_code=resp.status_code)
+        log_event("API_REQUEST_DONE", url=url, status_code=resp.status_code)
         return resp
     except requests.exceptions.RequestException as e:
-        jlog(event="API_REQUEST_ERROR", url=url, error=str(e))
+        log_event("API_REQUEST_ERROR", url=url, error=str(e))
         return None
 
-# -----------------------------------------------------------------------------
-# One-time startup health ping (safe for Flask 3)
-# -----------------------------------------------------------------------------
-def startup_ping():
-    jlog(event="APP_START",
-         version="1.0.0",
-         upload_dir=UPLOAD_FOLDER,
-         stats_file=STATS_FILE,
-         api_base=api_config['base_url'],
-         header_name=api_config['header_name'],
-         auth_scheme=api_config['auth_scheme'],
-         have_api_key=bool(api_config['api_key']))
-    r = make_api_request('GET', 'health/ready')
-    if r and r.status_code == 200:
-        jlog(event="UPSTREAM_HEALTH_OK", endpoint="health/ready")
-    else:
-        jlog(event="UPSTREAM_HEALTH_FAIL", status=(r.status_code if r else None))
+# ---------- Request logging ----------
+@app.before_request
+def _log_in():
+    log_event("HTTP_IN", method=request.method, path=request.path)
 
-startup_ping()
+@app.after_request
+def _log_out(response):
+    log_event("HTTP_OUT", status=response.status_code, path=request.path)
+    return response
 
-# -----------------------------------------------------------------------------
-# Routes
-# -----------------------------------------------------------------------------
-@app.route('/health/ready')
-def health_ready():
-    return jsonify({"status": "ok"}), 200
-
+# ---------- Routes ----------
 @app.route('/')
 def index():
-    jlog(event="ROUTE_INDEX")
+    # Probe upstream health on first hit (optional)
+    health = make_api_request('GET', 'health/ready')
+    if health and health.status_code == 200:
+        log_event("UPSTREAM_HEALTH_OK", endpoint="health/ready")
     stats = load_stats()
+    log_event("ROUTE_INDEX")
     return render_template('index.html', api_config=api_config, stats=stats)
 
 @app.route('/api/upload', methods=['POST'])
 def upload_file():
     if 'file' not in request.files:
-        jlog(event="UPLOAD_BEGIN", ok=False, reason="no_file_in_form")
+        log_event("UPLOAD_MISSING_FILE")
         return jsonify({'error': 'No file provided'}), 400
 
     f = request.files['file']
     if f.filename == '':
-        jlog(event="UPLOAD_BEGIN", ok=False, reason="empty_filename")
+        log_event("UPLOAD_EMPTY_FILENAME")
         return jsonify({'error': 'No file selected'}), 400
     if not allowed_file(f.filename):
-        jlog(event="UPLOAD_BEGIN", ok=False, reason="invalid_extension", filename=f.filename)
+        log_event("UPLOAD_INVALID_TYPE", filename=f.filename)
         return jsonify({'error': 'Invalid file type'}), 400
 
     filename = secure_filename(f.filename)
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
     f.save(filepath)
+    log_event("UPLOAD_SAVED", filename=filename, path=filepath)
 
     use_llm = request.form.get('use_llm', 'false').lower() in ('true', '1', 'yes', 'on')
     use_sync = request.form.get('use_sync', 'false').lower() in ('true', '1', 'yes', 'on')
     mode = request.form.get('mode', 'balanced')
-
-    jlog(event="UPLOAD_SAVED", filename=filename, size=os.path.getsize(filepath),
-         use_llm=use_llm, use_sync=use_sync, mode=mode)
 
     try:
         with open(filepath, 'rb') as doc:
             files = {'file': doc}
             data = {'use_llm': 'true' if use_llm else 'false', 'mode': mode}
             endpoint = 'extract/sync' if use_sync else 'extract/'
+            log_event("EXTRACT_CALL", endpoint=endpoint, mode=mode, use_llm=use_llm, use_sync=use_sync)
             resp = make_api_request('POST', endpoint, files=files, data=data)
 
         if not resp:
-            jlog(event="UPLOAD_FAIL", reason="no_response")
+            log_event("EXTRACT_NO_RESPONSE")
             return jsonify({'error': 'API request failed (no response)'}), 502
 
         if resp.status_code == 200:
@@ -263,50 +244,49 @@ def upload_file():
                     'timestamp': datetime.now().isoformat()
                 }
                 update_stats(len(payload['questions']), 5, payload['questions'])
-                jlog(event="UPLOAD_OK_SYNC", job_id=job_id, questions=len(payload['questions']))
+                log_event("EXTRACT_SYNC_OK", job_id=job_id, q=len(payload['questions']))
                 return jsonify({'success': True, 'job_id': job_id, 'questions': payload['questions']})
             else:
                 job_id = payload.get('job_id')
                 if job_id:
                     job_data[job_id] = {'status': 'processing', 'timestamp': datetime.now().isoformat()}
-                    jlog(event="UPLOAD_OK_ASYNC", job_id=job_id)
+                    log_event("EXTRACT_ASYNC_OK", job_id=job_id)
                     return jsonify({'success': True, 'job_id': job_id, 'async': True})
                 else:
-                    jlog(event="UPLOAD_FAIL", reason="missing_job_id", body=payload)
+                    log_event("EXTRACT_MISSING_JOB_ID")
                     return jsonify({'error': 'No job ID returned from API'}), 502
         else:
             try:
                 msg = resp.json()
             except Exception:
                 msg = resp.text
-            jlog(event="UPLOAD_FAIL", status=resp.status_code, message=msg)
+            log_event("EXTRACT_HTTP_ERROR", status=resp.status_code, message=str(msg))
             return jsonify({'error': f"HTTP {resp.status_code}: {msg}"}), resp.status_code
 
     except Exception as e:
-        jlog(event="UPLOAD_EXCEPTION", error=str(e))
+        log_event("UPLOAD_EXCEPTION", error=str(e))
         return jsonify({'error': str(e)}), 500
     finally:
         try:
             if os.path.exists(filepath):
                 os.remove(filepath)
-                jlog(event="UPLOAD_CLEANUP_OK", filename=filename)
+                log_event("UPLOAD_CLEANED", path=filepath)
         except Exception as e:
-            jlog(event="UPLOAD_CLEANUP_FAIL", filename=filename, error=str(e))
+            log_event("UPLOAD_CLEANUP_ERROR", error=str(e))
 
 @app.route('/api/poll/<job_id>')
 def poll_job(job_id):
-    jlog(event="POLL_BEGIN", job_id=job_id)
     if job_id not in job_data:
-        jlog(event="POLL_NOT_FOUND", job_id=job_id)
+        log_event("POLL_UNKNOWN_JOB", job_id=job_id)
         return jsonify({'error': 'Job not found'}), 404
 
     if job_data[job_id].get('status') == 'completed':
-        jlog(event="POLL_ALREADY_COMPLETE", job_id=job_id)
+        log_event("POLL_ALREADY_DONE", job_id=job_id)
         return jsonify(job_data[job_id])
 
     resp = make_api_request('GET', f'jobs/{job_id}')
     if not resp:
-        jlog(event="POLL_FAIL", job_id=job_id, reason="no_response")
+        log_event("POLL_API_FAIL", job_id=job_id)
         return jsonify({'error': 'Failed to poll job status'}), 502
 
     if resp.status_code == 404:
@@ -316,9 +296,9 @@ def poll_job(job_id):
             job_data[job_id]['status'] = 'completed'
             job_data[job_id]['questions'] = questions
             update_stats(len(questions), 30, questions)
-            jlog(event="POLL_COMPLETE_RECOVERED", job_id=job_id, questions=len(questions))
+            log_event("POLL_RECOVERED_VIA_QUESTIONS", job_id=job_id, q=len(questions))
             return jsonify({'status': 'completed', 'questions': questions})
-        jlog(event="POLL_COMPLETE_EMPTY", job_id=job_id)
+        log_event("POLL_NOT_FOUND_COMPLETING_EMPTY", job_id=job_id)
         return jsonify({'status': 'completed', 'questions': []})
 
     if resp.status_code != 200:
@@ -326,18 +306,18 @@ def poll_job(job_id):
             msg = resp.json()
         except Exception:
             msg = resp.text
-        jlog(event="POLL_FAIL", job_id=job_id, status=resp.status_code, message=msg)
+        log_event("POLL_HTTP_ERROR", job_id=job_id, status=resp.status_code, message=str(msg))
         return jsonify({'error': f"HTTP {resp.status_code}: {msg}"}), resp.status_code
 
     data = resp.json()
     job_data[job_id].update(data)
-    status = data.get('status', 'processing')
 
+    status = data.get('status', 'processing')
     if status == 'completed':
         if data.get('questions') is not None:
             qs = data['questions']
             update_stats(len(qs), 30, qs)
-            jlog(event="POLL_COMPLETE_INLINE", job_id=job_id, questions=len(qs))
+            log_event("POLL_COMPLETED_INLINE", job_id=job_id, q=len(qs))
             return jsonify(data)
         q = make_api_request('GET', f'jobs/{job_id}/questions')
         if q and q.status_code == 200:
@@ -345,9 +325,9 @@ def poll_job(job_id):
             job_data[job_id]['questions'] = qs
             update_stats(len(qs), 30, qs)
             data['questions'] = qs
-            jlog(event="POLL_COMPLETE_FETCHED", job_id=job_id, questions=len(qs))
+            log_event("POLL_COMPLETED_FETCHED", job_id=job_id, q=len(qs))
             return jsonify(data)
-        jlog(event="POLL_COMPLETE_NO_QUESTIONS", job_id=job_id)
+        log_event("POLL_COMPLETED_NO_QS", job_id=job_id)
         return jsonify({'status': 'completed', 'questions': []})
 
     if status == 'processing':
@@ -357,18 +337,16 @@ def poll_job(job_id):
                 started = datetime.fromisoformat(start)
                 if datetime.now() - started > timedelta(minutes=10):
                     job_data[job_id]['status'] = 'timeout'
-                    jlog(event="POLL_TIMEOUT", job_id=job_id)
+                    log_event("POLL_TIMEOUT", job_id=job_id)
                     return jsonify({'status': 'timeout', 'error': 'Processing timeout; try sync or no-LLM'})
             except Exception:
                 pass
-        jlog(event="POLL_PROCESSING", job_id=job_id, progress=data.get('progress'))
         return jsonify({'status': 'processing', 'progress': data.get('progress')})
 
     if status == 'failed':
-        jlog(event="POLL_FAILED_STATUS", job_id=job_id, data=data)
+        log_event("POLL_FAILED", job_id=job_id, data=data)
         return jsonify(data)
 
-    jlog(event="POLL_UNKNOWN_STATUS", job_id=job_id, status=status)
     return jsonify({'status': 'processing'})
 
 @app.route('/api/job/<job_id>/questions')
@@ -391,6 +369,7 @@ def get_job_questions(job_id):
 def review(job_id):
     if job_id not in job_data:
         return redirect(url_for('index'))
+
     job = job_data[job_id]
     questions = job.get('questions') or []
     if not questions:
@@ -398,6 +377,7 @@ def review(job_id):
         if resp and resp.status_code == 200:
             questions = resp.json()
             job['questions'] = questions
+
     return render_template('review.html', job_id=job_id, questions=questions, job=job)
 
 @app.route('/api/save_edits/<job_id>', methods=['POST'])
@@ -406,6 +386,7 @@ def save_edits(job_id):
     incoming = data.get('questions', [])
     if job_id not in job_edits:
         job_edits[job_id] = []
+
     index = {q.get('qid'): i for i, q in enumerate(job_edits[job_id])}
     for q in incoming:
         qid = q.get('qid')
@@ -413,21 +394,8 @@ def save_edits(job_id):
             job_edits[job_id][index[qid]] = q
         else:
             job_edits[job_id].append(q)
-    jlog(event="EDITS_SAVED", job_id=job_id, count=len(incoming))
-    return jsonify({'success': True})
 
-@app.route('/api/delete_job/<qid>', methods=['DELETE'])
-def delete_row(qid):
-    # purely client-side removal helper; also drop from any cached job if present
-    removed = False
-    for jid, jd in job_data.items():
-        if 'questions' in jd and isinstance(jd['questions'], list):
-            before = len(jd['questions'])
-            jd['questions'] = [q for q in jd['questions'] if str(q.get('qid')) != str(qid)]
-            after = len(jd['questions'])
-            if after < before:
-                removed = True
-    jlog(event="ROW_DELETED", qid=qid, removed=removed)
+    log_event("SAVE_EDITS", job_id=job_id, count=len(incoming))
     return jsonify({'success': True})
 
 @app.route('/api/export/<job_id>/<format>')
@@ -451,8 +419,6 @@ def export_data(job_id, format):
         return True
 
     questions = [q for q in questions if keep(q)]
-    jlog(event="EXPORT_BEGIN", job_id=job_id, fmt=format, rows=len(questions),
-         approved_only=approved_only, high_conf=high_conf)
 
     if format == 'docx':
         try:
@@ -463,21 +429,25 @@ def export_data(job_id, format):
             doc.add_paragraph(f'Job ID: {job_id}')
             doc.add_paragraph(f'Total Questions: {len(questions)}')
             doc.add_paragraph('')
+
             for i, q in enumerate(questions, 1):
                 doc.add_heading(f'Question {i}', level=2)
                 doc.add_paragraph(f'Text: {q.get("text","N/A")}')
                 doc.add_paragraph(f'Confidence: {q.get("confidence","N/A")}')
                 doc.add_paragraph(f'Type: {q.get("type","N/A")}')
-                section = (q.get("section_path") or ["N/A"])[0]
+                section = (q.get("section_path") or ["N/A"])[0] if q.get("section_path") else "N/A"
                 doc.add_paragraph(f'Section: {section}')
                 doc.add_paragraph('')
-            bio = io.BytesIO(); doc.save(bio); bio.seek(0)
+
+            bio = io.BytesIO()
+            doc.save(bio)
+            bio.seek(0)
             fname = f"RFP_Questions_Report_{datetime.now():%Y%m%d_%H%M%S}.docx"
-            jlog(event="EXPORT_DONE", job_id=job_id, fmt="docx", bytes=len(bio.getvalue()))
             return send_file(bio, as_attachment=True,
                              download_name=fname,
                              mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
         except ImportError:
+            # fall back to plain text
             content = [
                 "RFP Questions Export",
                 f"Generated on: {datetime.now():%Y-%m-%d %H:%M:%S}",
@@ -494,7 +464,6 @@ def export_data(job_id, format):
                 content.append("")
             body = "\n".join(content)
             fname = f"RFP_Questions_Report_{datetime.now():%Y%m%d_%H%M%S}.txt"
-            jlog(event="EXPORT_DONE", job_id=job_id, fmt="txt", bytes=len(body.encode("utf-8")))
             return body, 200, {
                 'Content-Type': 'text/plain',
                 'Content-Disposition': f'attachment; filename="{fname}"'
@@ -510,11 +479,12 @@ def export_data(job_id, format):
                 df.to_excel(w, sheet_name='RFP Questions', index=False)
             bio.seek(0)
             fname = f"RFP_Questions_Report_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
-            jlog(event="EXPORT_DONE", job_id=job_id, fmt="xlsx", bytes=len(bio.getvalue()))
             return send_file(bio, as_attachment=True,
                              download_name=fname,
                              mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         except ImportError:
+            # CSV fallback (no pandas)
+            import csv
             out = io.StringIO()
             rows = []
             for q in questions:
@@ -530,18 +500,18 @@ def export_data(job_id, format):
                 })
             if rows:
                 writer = csv.DictWriter(out, fieldnames=rows[0].keys())
-                writer.writeheader(); writer.writerows(rows)
+                writer.writeheader()
+                writer.writerows(rows)
             fname = f"RFP_Questions_Report_{datetime.now():%Y%m%d_%H%M%S}.csv"
-            body = out.getvalue()
-            jlog(event="EXPORT_DONE", job_id=job_id, fmt="csv", bytes=len(body.encode("utf-8")))
-            return body, 200, {
+            return out.getvalue(), 200, {
                 'Content-Type': 'text/csv',
                 'Content-Disposition': f'attachment; filename="{fname}"'
             }
 
     return jsonify({'error': 'Invalid format'}), 400
 
-# NOTE: No app.run() for Posit Connect gunicorn loader
+
 if __name__ == '__main__':
     print("Starting RFP Extraction App on port 5002...")
+    print("Open your browser at http://localhost:5002")
     app.run(debug=True, port=5002, host='0.0.0.0')
