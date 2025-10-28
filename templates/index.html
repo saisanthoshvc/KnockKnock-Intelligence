@@ -701,7 +701,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         const processingMode = document.querySelector('input[name="processingMode"]:checked').value;
         const useLLM = processingMode === 'ai';
-        the useSync = processingMode === 'sync';
+        const useSync = processingMode === 'sync';
 
         console.log('Parsing document:', selectedFile.name, 'Processing Mode:', processingMode, 'useLLM:', useLLM, 'useSync:', useSync);
 
