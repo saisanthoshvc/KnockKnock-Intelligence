@@ -141,6 +141,11 @@
                 <i class="fas fa-check-square"></i>
                 Select All
             </button>
+            <!-- NEW: Bulk Approve button -->
+            <button class="btn btn-success" onclick="bulkApproveAll()">
+                <i class="fas fa-check-double"></i>
+                Approve All
+            </button>
         </div>
     </div>
     
@@ -183,7 +188,6 @@
                     </td>
                     <td class="status-col">
                         <select class="status-select" data-field="status" data-qid="{{ question.qid }}">
-                            <!-- FIX: reflect server-side status so metrics match reality -->
                             <option value="pending" {{ 'selected' if question.status=='pending' else '' }}>Pending</option>
                             <option value="approved" {{ 'selected' if question.status=='approved' else '' }}>Approved</option>
                             <option value="rejected" {{ 'selected' if question.status=='rejected' else '' }}>Rejected</option>
@@ -206,7 +210,7 @@
     </div>
 </div>
 
-<!-- Export Modal -->
+<!-- Export Modal (unchanged except IDs already present) -->
 <div class="modal" id="exportModal">
     <div class="modal-content">
         <div class="modal-header">
@@ -244,7 +248,6 @@
                     <h4>Export Filters</h4>
                     <div class="filter-options">
                         <label class="filter-option">
-                            <!-- FIX: default unchecked so users export everything unless they opt-in -->
                             <input type="checkbox" id="exportApproved">
                             <span>Approved Questions Only</span>
                         </label>
@@ -267,192 +270,105 @@
 </div>
 
 <style>
-/* (styles unchanged) */
-.review-header {
-    margin-bottom: 2rem;
-}
-.header-content {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 2rem;
-}
+/* (all your existing styles unchanged) */
+.review-header { margin-bottom: 2rem; }
+.header-content { display: flex; justify-content: space-between; align-items: flex-start; gap: 2rem; }
 .header-left { flex: 1; }
-.page-title {
-    font-size: 2.5rem;
-    font-weight: 800;
-    margin-bottom: 0.5rem;
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    color: var(--text-primary);
-}
+.page-title { font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 1rem; color: var(--text-primary); }
 .page-title i { color: var(--accent-blue); font-size: 2rem; }
 .page-subtitle { font-size: 1.125rem; color: var(--text-secondary); }
 .header-actions { display: flex; gap: 1rem; align-items: center; }
 
-/* Metrics Dashboard */
 .metrics-dashboard { margin-bottom: 2rem; }
-.metrics-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1.5rem;
-}
-.metric-card {
-    display: flex; align-items: center; gap: 1rem; padding: 1.5rem;
-    background: rgba(255, 255, 255, 0.03); border-radius: 16px; border: 1px solid var(--border);
-    transition: all 0.3s ease;
-}
-.metric-card:hover {
-    background: rgba(255, 255, 255, 0.05); border-color: var(--border-hover);
-    transform: translateY(-2px); box-shadow: var(--shadow-lg);
-}
-.metric-icon {
-    width: 50px; height: 50px; background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
-    border-radius: 12px; display: flex; align-items: center; justify-content: center; color: white; font-size: 1.25rem; box-shadow: var(--shadow);
-}
+.metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; }
+.metric-card { display: flex; align-items: center; gap: 1rem; padding: 1.5rem; background: rgba(255,255,255,0.03); border-radius: 16px; border: 1px solid var(--border); transition: all .3s ease; }
+.metric-card:hover { background: rgba(255,255,255,0.05); border-color: var(--border-hover); transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+.metric-icon { width: 50px; height: 50px; background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 1.25rem; box-shadow: var(--shadow); }
 .metric-content { flex: 1; }
-.metric-value {
-    font-size: 2rem; font-weight: 800; color: var(--text-primary); margin-bottom: 0.25rem;
-    background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
-    -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
-}
-.metric-label {
-    font-size: 0.875rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
-}
+.metric-value { font-size: 2rem; font-weight: 800; color: var(--text-primary); margin-bottom: .25rem; background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+.metric-label { font-size: .875rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
 
-/* Filters Section */
-.filters-section {
-    margin-bottom: 2rem; background: rgba(255, 255, 255, 0.02); border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 16px; padding: 2rem; backdrop-filter: blur(10px);
-}
-.filters-header {
-    display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem;
-}
-.filters-title { font-size: 1.5rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 0.75rem; }
+.filters-section { margin-bottom: 2rem; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; padding: 2rem; backdrop-filter: blur(10px); }
+.filters-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem; }
+.filters-title { font-size: 1.5rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: .75rem; }
 .filters-title i { color: var(--accent-blue); }
 .filters-actions { display: flex; gap: 1rem; }
-.filters-grid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2rem; align-items: start;
-}
-.filter-group { display: flex; flex-direction: column; gap: 0.5rem; }
-.filter-label {
-    font-weight: 600; color: var(--text-primary); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;
-}
+
+.filters-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 2rem; align-items: start; }
+.filter-group { display: flex; flex-direction: column; gap: .5rem; }
+.filter-label { font-weight: 600; color: var(--text-primary); font-size: .9rem; text-transform: uppercase; letter-spacing: .5px; }
 .confidence-slider { display: flex; align-items: center; gap: 1rem; }
 .slider { flex: 1; height: 6px; border-radius: 3px; background: var(--border); outline: none; -webkit-appearance: none; }
-.slider::-webkit-slider-thumb {
-    -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-blue); cursor: pointer; box-shadow: var(--shadow);
-}
+.slider::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-blue); cursor: pointer; box-shadow: var(--shadow); }
 .slider-value { font-weight: 700; color: var(--accent-blue); min-width: 40px; text-align: center; }
-.filter-select {
-    padding: 0.75rem 1rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border);
-    border-radius: 12px; color: var(--text-primary); font-size: 0.9rem; transition: all 0.3s ease;
-}
-.filter-select:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); }
+.filter-select { padding: .75rem 1rem; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 12px; color: var(--text-primary); font-size: .9rem; transition: all .3s ease; }
+.filter-select:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 0 3px rgba(59,130,246,.1); }
 .search-input { position: relative; display: flex; align-items: center; }
 .search-input i { position: absolute; left: 1rem; color: var(--text-muted); z-index: 1; }
-.search-input input {
-    width: 100%; padding: 0.75rem 1rem 0.75rem 2.5rem; background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--border); border-radius: 12px; color: var(--text-primary); font-size: 0.9rem; transition: all 0.3s ease;
-}
-.search-input input:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); }
+.search-input input { width: 100%; padding: .75rem 1rem .75rem 2.5rem; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 12px; color: var(--text-primary); font-size: .9rem; transition: all .3s ease; }
+.search-input input:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 0 3px rgba(59,130,246,.1); }
 
-/* Questions Section */
 .questions-section { margin-bottom: 2rem; }
 .table-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
-.table-title { font-size: 1.5rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 0.75rem; }
+.table-title { font-size: 1.5rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: .75rem; }
 .table-title i { color: var(--accent-blue); }
-.table-actions { display: flex; gap: 0.75rem; }
-.table-container { overflow-x: auto; border-radius: 16px; border: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); }
-.questions-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-.questions-table th {
-    background: rgba(59, 130, 246, 0.1); color: var(--text-primary); font-weight: 700; padding: 1rem; text-align: left;
-    border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.5px; font-size: 0.8rem;
-}
-.questions-table td { padding: 1rem; border-bottom: 1px solid rgba(255, 255, 255, 0.05); vertical-align: top; }
-.question-row:hover { background: rgba(59, 130, 246, 0.05); }
+.table-actions { display: flex; gap: .75rem; }
+.table-container { overflow-x: auto; border-radius: 16px; border: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+.questions-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+.questions-table th { background: rgba(59,130,246,.1); color: var(--text-primary); font-weight: 700; padding: 1rem; text-align: left; border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .5px; font-size: .8rem; }
+.questions-table td { padding: 1rem; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: top; }
+.question-row:hover { background: rgba(59,130,246,.05); }
 .checkbox-col { width: 50px; text-align: center; }
 .question-col { min-width: 300px; }
-.question-text {
-    width: 100%; min-height: 60px; padding: 0.75rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border);
-    border-radius: 8px; color: var(--text-primary); font-size: 0.9rem; line-height: 1.4; resize: vertical; transition: all 0.3s ease;
-}
-.question-text:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1); }
+.question-text { width: 100%; min-height: 60px; padding: .75rem; background: rgba(255,255,255,.05); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); font-size: .9rem; line-height: 1.4; resize: vertical; transition: all .3s ease; }
+.question-text:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 0 2px rgba(59,130,246,.1); }
 .confidence-col { width: 150px; }
-.confidence-display { display: flex; flex-direction: column; gap: 0.5rem; }
-.confidence-input {
-    width: 100%; padding: 0.5rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border);
-    border-radius: 6px; color: var(--text-primary); font-size: 0.8rem; text-align: center;
-}
+.confidence-display { display: flex; flex-direction: column; gap: .5rem; }
+.confidence-input { width: 100%; padding: .5rem; background: rgba(255,255,255,.05); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: .8rem; text-align: center; }
 .confidence-bar { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; }
-.confidence-fill { height: 100%; background: linear-gradient(90deg, var(--error), var(--warning), var(--success)); transition: width 0.3s ease; }
+.confidence-fill { height: 100%; background: linear-gradient(90deg, var(--error), var(--warning), var(--success)); transition: width .3s ease; }
 .type-col { width: 120px; }
-.type-badge {
-    display: inline-block; padding: 0.25rem 0.75rem; border-radius: 12px; font-size: 0.75rem; font-weight: 600;
-    text-transform: uppercase; letter-spacing: 0.5px;
-}
-.type-what { background: rgba(59, 130, 246, 0.2); color: var(--accent-blue); }
-.type-how { background: rgba(16, 185, 129, 0.2); color: var(--success); }
-.type-when { background: rgba(245, 158, 11, 0.2); color: var(--warning); }
-.type-where { background: rgba(139, 92, 246, 0.2); color: var(--accent-purple); }
-.type-why { background: rgba(239, 68, 68, 0.2); color: var(--error); }
-.type-other { background: rgba(107, 114, 128, 0.2); color: var(--text-muted); }
+.type-badge { display: inline-block; padding: .25rem .75rem; border-radius: 12px; font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+.type-what { background: rgba(59,130,246,.2); color: var(--accent-blue); }
+.type-how { background: rgba(16,185,129,.2); color: var(--success); }
+.type-when { background: rgba(245,158,11,.2); color: var(--warning); }
+.type-where { background: rgba(139,92,246,.2); color: var(--accent-purple); }
+.type-why { background: rgba(239,68,68,.2); color: var(--error); }
+.type-other { background: rgba(107,114,128,.2); color: var(--text-muted); }
 .status-col { width: 120px; }
-.status-select {
-    width: 100%; padding: 0.5rem; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border);
-    border-radius: 6px; color: var(--text-primary); font-size: 0.8rem;
-}
+.status-select { width: 100%; padding: .5rem; background: rgba(255,255,255,.05); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-size: .8rem; }
 .actions-col { width: 100px; }
-.action-buttons { display: flex; gap: 0.5rem; }
-.btn-icon {
-    width: 32px; height: 32px; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 0.8rem; transition: all 0.3s ease;
-}
-.btn-save { background: rgba(16, 185, 129, 0.2); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.3); }
-.btn-save:hover { background: var(--success); color: white; transform: scale(1.1); }
-.btn-delete { background: rgba(239, 68, 68, 0.2); color: var(--error); border: 1px solid rgba(239, 68, 68, 0.3); }
-.btn-delete:hover { background: var(--error); color: white; transform: scale(1.1); }
+.action-buttons { display: flex; gap: .5rem; }
+.btn-icon { width: 32px; height: 32px; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: .8rem; transition: all .3s ease; }
+.btn-save { background: rgba(16,185,129,.2); color: var(--success); border: 1px solid rgba(16,185,129,.3); }
+.btn-save:hover { background: var(--success); color: #fff; transform: scale(1.1); }
+.btn-delete { background: rgba(239,68,68,.2); color: var(--error); border: 1px solid rgba(239,68,68,.3); }
+.btn-delete:hover { background: var(--error); color: #fff; transform: scale(1.1); }
 
-/* Modal */
-.modal {
-    display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    background: rgba(0, 0, 0, 0.8); backdrop-filter: blur(10px); z-index: 1000; align-items: center; justify-content: center;
-}
+/* Modal + Responsive + Notifications unchanged */
+.modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,.8); backdrop-filter: blur(10px); z-index: 1000; align-items: center; justify-content: center; }
 .modal.show { display: flex; }
-.modal-content {
-    background: var(--glass); backdrop-filter: blur(25px); border: 1px solid var(--border); border-radius: 20px;
-    max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto; box-shadow: var(--shadow-2xl);
-}
+.modal-content { background: var(--glass); backdrop-filter: blur(25px); border: 1px solid var(--border); border-radius: 20px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto; box-shadow: var(--shadow-2xl); }
 .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1.5rem; border-bottom: 1px solid var(--border); }
-.modal-title { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: 0.75rem; }
+.modal-title { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: .75rem; }
 .modal-title i { color: var(--accent-blue); }
-.modal-close {
-    width: 32px; height: 32px; border: none; background: rgba(255, 255, 255, 0.1); border-radius: 6px; color: var(--text-secondary);
-    cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.3s ease;
-}
-.modal-close:hover { background: var(--error); color: white; }
+.modal-close { width: 32px; height: 32px; border: none; background: rgba(255,255,255,.1); border-radius: 6px; color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .3s ease; }
+.modal-close:hover { background: var(--error); color: #fff; }
 .modal-body { padding: 1.5rem; }
 .modal-footer { display: flex; justify-content: flex-end; gap: 1rem; padding: 1.5rem; border-top: 1px solid var(--border); }
 .export-options { display: flex; flex-direction: column; gap: 2rem; }
 .export-format h4, .export-filters h4 { font-size: 1rem; font-weight: 700; color: var(--text-primary); margin-bottom: 1rem; }
 .format-options { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; }
-.format-option {
-    display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--border); border-radius: 12px; cursor: pointer; transition: all 0.3s ease;
-}
-.format-option:hover { background: rgba(255, 255, 255, 0.05); border-color: var(--border-hover); }
+.format-option { display: flex; align-items: center; gap: .75rem; padding: 1rem; background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px; cursor: pointer; transition: all .3s ease; }
+.format-option:hover { background: rgba(255,255,255,.05); border-color: var(--border-hover); }
 .format-option input[type="radio"] { margin: 0; }
-.format-label { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; color: var(--text-primary); }
+.format-label { display: flex; align-items: center; gap: .5rem; font-weight: 600; color: var(--text-primary); }
 .format-label i { color: var(--accent-blue); }
 .filter-options { display: flex; flex-direction: column; gap: 1rem; }
-.filter-option {
-    display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem; background: rgba(255, 255, 255, 0.03);
-    border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: all 0.3s ease;
-}
-.filter-option:hover { background: rgba(255, 255, 255, 0.05); border-color: var(--border-hover); }
+.filter-option { display: flex; align-items: center; gap: .75rem; padding: .75rem; background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: all .3s ease; }
+.filter-option:hover { background: rgba(255,255,255,.05); border-color: var(--border-hover); }
 .filter-option input[type="checkbox"] { margin: 0; }
 
-/* Responsive Design */
 @media (max-width: 1024px) {
     .header-content { flex-direction: column; align-items: stretch; }
     .header-actions { justify-content: flex-end; }
@@ -462,22 +378,18 @@
 @media (max-width: 768px) {
     .page-title { font-size: 2rem; }
     .metrics-grid { grid-template-columns: 1fr; }
-    .table-actions { flex-direction: column; gap: 0.5rem; }
-    .questions-table { font-size: 0.8rem; }
-    .questions-table th, .questions-table td { padding: 0.75rem 0.5rem; }
+    .table-actions { flex-direction: column; gap: .5rem; }
+    .questions-table { font-size: .8rem; }
+    .questions-table th, .questions-table td { padding: .75rem .5rem; }
     .format-options { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
-    .header-actions { flex-direction: column; gap: 0.75rem; }
-    .filters-actions { flex-direction: column; gap: 0.75rem; }
-    .table-actions { flex-direction: column; gap: 0.5rem; }
+    .header-actions { flex-direction: column; gap: .75rem; }
+    .filters-actions { flex-direction: column; gap: .75rem; }
+    .table-actions { flex-direction: column; gap: .5rem; }
 }
 
-/* Notification Styles */
-.notification {
-    position: fixed; top: 20px; right: 20px; padding: 1rem 1.5rem; border-radius: 12px; color: white; font-weight: 600;
-    z-index: 10000; transform: translateX(100%); transition: transform 0.3s ease; max-width: 400px; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
-}
+.notification { position: fixed; top: 20px; right: 20px; padding: 1rem 1.5rem; border-radius: 12px; color: #fff; font-weight: 600; z-index: 10000; transform: translateX(100%); transition: transform .3s ease; max-width: 400px; box-shadow: 0 10px 25px rgba(0,0,0,.3); }
 .notification.show { transform: translateX(0); }
 .notification.success { background: linear-gradient(135deg, #10b981, #059669); }
 .notification.error { background: linear-gradient(135deg, #ef4444, #dc2626); }
@@ -494,13 +406,8 @@ const URLS = {
 };
 
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize filters
     initializeFilters();
-    
-    // Initialize table interactions
     initializeTable();
-    
-    // Update metrics
     updateMetrics();
 });
 
@@ -511,30 +418,21 @@ function initializeFilters() {
     const searchInput = document.getElementById('searchInput');
     const statusFilter = document.getElementById('statusFilter');
     
-    // Confidence slider
     confidenceSlider.addEventListener('input', function() {
         const value = this.value;
         confidenceValue.textContent = value + '%';
         filterTable();
     });
-    
-    // Type filter
     typeFilter.addEventListener('change', filterTable);
-    
-    // Search input
     searchInput.addEventListener('input', debounce(filterTable, 300));
-    
-    // Status filter
     statusFilter.addEventListener('change', filterTable);
 }
 
 function initializeTable() {
-    // Add event listeners to all editable fields
     document.querySelectorAll('.question-text, .confidence-input, .status-select').forEach(field => {
         field.addEventListener('change', function() {
             const row = this.closest('.question-row');
             row.classList.add('modified');
-            // FIX: keep Approved metric live when a status changes
             if (this.classList.contains('status-select')) {
                 updateMetrics();
             }
@@ -549,7 +447,6 @@ function filterTable() {
     const statusFilter = document.getElementById('statusFilter').value;
     
     const rows = document.querySelectorAll('.question-row');
-    
     rows.forEach(row => {
         const confidence = parseFloat(row.querySelector('.confidence-input').value);
         const type = row.querySelector('.type-badge').textContent.toLowerCase();
@@ -557,12 +454,10 @@ function filterTable() {
         const status = row.querySelector('.status-select').value;
         
         let show = true;
-        
         if (confidence < confidenceThreshold) show = false;
         if (typeFilter && type !== typeFilter.toLowerCase()) show = false;
         if (searchTerm && !questionText.includes(searchTerm)) show = false;
         if (statusFilter && status !== statusFilter) show = false;
-        
         row.style.display = show ? '' : 'none';
     });
 }
@@ -573,20 +468,13 @@ function clearFilters() {
     document.getElementById('typeFilter').value = '';
     document.getElementById('searchInput').value = '';
     document.getElementById('statusFilter').value = '';
-    
-    // Show all rows
-    document.querySelectorAll('.question-row').forEach(row => {
-        row.style.display = '';
-    });
+    document.querySelectorAll('.question-row').forEach(row => { row.style.display = ''; });
 }
 
 function toggleSelectAll() {
     const selectAllCheckbox = document.getElementById('selectAllCheckbox');
     const rowCheckboxes = document.querySelectorAll('.row-checkbox');
-    
-    rowCheckboxes.forEach(checkbox => {
-        checkbox.checked = selectAllCheckbox.checked;
-    });
+    rowCheckboxes.forEach(checkbox => { checkbox.checked = selectAllCheckbox.checked; });
 }
 
 function selectAll() {
@@ -607,16 +495,12 @@ function saveRow(qid) {
         confidence: parseFloat(row.querySelector('.confidence-input').value),
         status: row.querySelector('.status-select').value
     };
-    
-    // Get job_id from the URL or from a global variable
-    const jobId = window.location.pathname.split('/').pop();
-    
     fetch(URLS.saveEdits, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ questions: [questionData] })
     })
-    .then(response => response.json())
+    .then(r => r.json())
     .then(data => {
         if (data.success) {
             row.classList.remove('modified');
@@ -625,25 +509,19 @@ function saveRow(qid) {
             showNotification('Failed to save question', 'error');
         }
     })
-    .catch(error => {
-        console.error('Save error:', error);
+    .catch(err => {
+        console.error('Save error:', err);
         showNotification('Error saving question', 'error');
     });
 }
 
 function saveAllEdits() {
     const modifiedRows = document.querySelectorAll('.question-row.modified');
-    
-    console.log('DEBUG: Found', modifiedRows.length, 'modified rows');
-    
     if (modifiedRows.length === 0) {
         showNotification('No changes to save', 'info');
         return;
     }
-    
-    const jobId = window.location.pathname.split('/').pop();
     const questions = [];
-    
     modifiedRows.forEach(row => {
         const questionData = {
             qid: row.dataset.questionId,
@@ -652,33 +530,24 @@ function saveAllEdits() {
             status: row.querySelector('.status-select').value
         };
         questions.push(questionData);
-        console.log('DEBUG: Prepared question data:', questionData);
     });
-    
-    console.log('DEBUG: Sending', questions.length, 'questions to save');
-    
     fetch(URLS.saveEdits, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ questions })
     })
-    .then(response => {
-        console.log('DEBUG: Save response status:', response.status);
-        return response.json();
-    })
+    .then(r => r.json())
     .then(data => {
-        console.log('DEBUG: Save response data:', data);
         if (data.success) {
-            // Remove modified class from all rows
             modifiedRows.forEach(row => row.classList.remove('modified'));
             showNotification(`✅ Saved ${questions.length} questions successfully!`, 'success');
         } else {
             showNotification('❌ Failed to save questions', 'error');
         }
     })
-    .catch(error => {
-        console.error('Save error:', error);
-        showNotification('❌ Error saving questions: ' + error.message, 'error');
+    .catch(err => {
+        console.error('Save error:', err);
+        showNotification('❌ Error saving questions: ' + err.message, 'error');
     });
 }
 
@@ -704,7 +573,6 @@ function confirmExport() {
     const approvedOnly = document.getElementById('exportApproved').checked;
     const highConfidenceOnly = document.getElementById('exportHighConfidence').checked;
 
-    // FIX: warn if exporting "Approved only" but none are approved (prevents empty files)
     if (approvedOnly) {
         const approvedNow = Array.from(document.querySelectorAll('.status-select'))
             .filter(sel => sel.value === 'approved').length;
@@ -734,40 +602,51 @@ function confirmExport() {
 
 function updateMetrics() {
     const totalRows = document.querySelectorAll('.question-row').length;
-    // FIX: count selected value, not the element attribute
     const approvedCount = Array.from(document.querySelectorAll('.status-select'))
         .filter(sel => sel.value === 'approved').length;
-    
     document.getElementById('totalRows').textContent = totalRows;
     document.getElementById('approvedCount').textContent = approvedCount;
+}
+
+/* NEW: Bulk Approve All */
+function bulkApproveAll() {
+    const rows = document.querySelectorAll('.question-row');
+    if (rows.length === 0) {
+        showNotification('No questions to approve', 'info');
+        return;
+    }
+    const ok = confirm(`Approve ALL ${rows.length} questions? This will mark every question as Approved and save.`);
+    if (!ok) return;
+
+    rows.forEach(row => {
+        const statusSel = row.querySelector('.status-select');
+        if (statusSel && statusSel.value !== 'approved') {
+            statusSel.value = 'approved';
+            row.classList.add('modified');
+        }
+    });
+
+    updateMetrics();
+    // Persist immediately so export reflects approvals
+    saveAllEdits();
 }
 
 function showNotification(message, type) {
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
     notification.textContent = message;
-    
     document.body.appendChild(notification);
-    
-    setTimeout(() => {
-        notification.classList.add('show');
-    }, 100);
-    
+    setTimeout(() => { notification.classList.add('show'); }, 100);
     setTimeout(() => {
         notification.classList.remove('show');
-        setTimeout(() => {
-            document.body.removeChild(notification);
-        }, 300);
+        setTimeout(() => { document.body.removeChild(notification); }, 300);
     }, 3000);
 }
 
 function debounce(func, wait) {
     let timeout;
-    return function executedFunction(...args) {
-        const later = () => {
-            clearTimeout(timeout);
-            func(...args);
-        };
+    return function(...args) {
+        const later = () => { clearTimeout(timeout); func(...args); };
         clearTimeout(timeout);
         timeout = setTimeout(later, wait);
     };
