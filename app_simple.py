@@ -403,10 +403,39 @@ def export_data(job_id, format):
     if job_id not in job_data:
         return jsonify({'error': 'Job not found'}), 404
 
-    original = job_data[job_id].get('questions', [])
-    edits = job_edits.get(job_id, [])
+    original = job_data[job_id].get('questions', []) or []
+    edits = job_edits.get(job_id, []) or []
     edits_by_id = {q.get('qid'): q for q in edits}
-    questions = [edits_by_id.get(q.get('qid'), q) for q in original]
+
+    def normalize(q):
+        q = dict(q or {})
+        # unify ID
+        q['qid'] = q.get('qid') or q.get('id') or q.get('question_id')
+        # status default + sanitize
+        status = (q.get('status') or '').strip().lower()
+        if status not in ('approved', 'pending', 'rejected'):
+            status = 'pending'
+        q['status'] = status
+        # normalize confidence to 0..1 float
+        try:
+            c = float(q.get('confidence', 0))
+            if c > 1:  # handle 0..100 inputs
+                c = c / 100.0
+        except Exception:
+            c = 0.0
+        q['confidence'] = round(c, 3)
+        return q
+
+    # merge originals with edits (edits override)
+    merged = []
+    for oq in original:
+        base = normalize(oq)
+        override = normalize(edits_by_id.get(base.get('qid'), {}))
+        for k in ('text', 'confidence', 'status', 'type', 'section_path', 'numbering', 'category'):
+            v = override.get(k)
+            if v not in (None, '', []):
+                base[k] = v
+        merged.append(base)
 
     approved_only = request.args.get('approved') in ('true', '1', 'yes', 'on')
     high_conf = request.args.get('high_confidence') in ('true', '1', 'yes', 'on')
@@ -414,11 +443,11 @@ def export_data(job_id, format):
     def keep(q):
         if approved_only and q.get('status') != 'approved':
             return False
-        if high_conf and (float(q.get('confidence', 0)) < 0.8):
+        if high_conf and float(q.get('confidence', 0)) < 0.8:
             return False
         return True
 
-    questions = [q for q in questions if keep(q)]
+    questions = [q for q in merged if keep(q)]
 
     if format == 'docx':
         try:
@@ -433,7 +462,9 @@ def export_data(job_id, format):
             for i, q in enumerate(questions, 1):
                 doc.add_heading(f'Question {i}', level=2)
                 doc.add_paragraph(f'Text: {q.get("text","N/A")}')
-                doc.add_paragraph(f'Confidence: {q.get("confidence","N/A")}')
+                # NEW: include status and pct confidence
+                doc.add_paragraph(f'Status: {q.get("status","pending").title()}')
+                doc.add_paragraph(f'Confidence: {int(round(float(q.get("confidence",0))*100))}%')
                 doc.add_paragraph(f'Type: {q.get("type","N/A")}')
                 section = (q.get("section_path") or ["N/A"])[0] if q.get("section_path") else "N/A"
                 doc.add_paragraph(f'Section: {section}')
@@ -443,13 +474,14 @@ def export_data(job_id, format):
             doc.save(bio)
             bio.seek(0)
             fname = f"RFP_Questions_Report_{datetime.now():%Y%m%d_%H%M%S}.docx"
-            return send_file(bio, as_attachment=True,
-                             download_name=fname,
-                             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+            return send_file(
+                bio, as_attachment=True, download_name=fname,
+                mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            )
         except ImportError:
-            # fall back to plain text
+            # TXT fallback (also includes Status now)
             content = [
-                "RFP Questions Export",
+                "RFP Questions Report",
                 f"Generated on: {datetime.now():%Y-%m-%d %H:%M:%S}",
                 f"Job ID: {job_id}",
                 f"Total Questions: {len(questions)}",
@@ -458,7 +490,8 @@ def export_data(job_id, format):
             for i, q in enumerate(questions, 1):
                 section = (q.get("section_path") or [""])[0] if q.get("section_path") else ""
                 content.append(f"{i}. {q.get('text','N/A')}")
-                content.append(f"   Confidence: {q.get('confidence','N/A')}")
+                content.append(f"   Status: {q.get('status','pending').title()}")
+                content.append(f"   Confidence: {int(round(float(q.get('confidence',0))*100))}%")
                 content.append(f"   Type: {q.get('type','N/A')}")
                 content.append(f"   Section: {section}")
                 content.append("")
@@ -466,24 +499,30 @@ def export_data(job_id, format):
             fname = f"RFP_Questions_Report_{datetime.now():%Y%m%d_%H%M%S}.txt"
             return body, 200, {
                 'Content-Type': 'text/plain',
-                'Content-Disposition': f'attachment; filename="{fname}"'
+                'Content-Disposition': f'attachment; filename=\"{fname}\"'
             }
 
     elif format == 'xlsx':
         try:
             import pandas as pd
             import openpyxl  # ensure engine available
+            # DataFrame will now include a 'status' column for everyone (default pending)
             df = pd.DataFrame(questions)
+            # Optional: column order
+            cols = ['qid','text','status','confidence','type','numbering','category','section_path']
+            existing = [c for c in cols if c in df.columns]
+            df = df[existing + [c for c in df.columns if c not in existing]]
             bio = io.BytesIO()
             with pd.ExcelWriter(bio, engine='openpyxl') as w:
                 df.to_excel(w, sheet_name='RFP Questions', index=False)
             bio.seek(0)
             fname = f"RFP_Questions_Report_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
-            return send_file(bio, as_attachment=True,
-                             download_name=fname,
-                             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            return send_file(
+                bio, as_attachment=True, download_name=fname,
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
         except ImportError:
-            # CSV fallback (no pandas)
+            # CSV fallback (already had status, keep it)
             import csv
             out = io.StringIO()
             rows = []
@@ -491,9 +530,9 @@ def export_data(job_id, format):
                 rows.append({
                     'qid': q.get('qid',''),
                     'text': q.get('text',''),
+                    'status': q.get('status',''),
                     'confidence': q.get('confidence',''),
                     'type': q.get('type',''),
-                    'status': q.get('status',''),
                     'section': (q.get('section_path') or [''])[0] if q.get('section_path') else '',
                     'numbering': q.get('numbering',''),
                     'category': q.get('category','')
@@ -505,7 +544,7 @@ def export_data(job_id, format):
             fname = f"RFP_Questions_Report_{datetime.now():%Y%m%d_%H%M%S}.csv"
             return out.getvalue(), 200, {
                 'Content-Type': 'text/csv',
-                'Content-Disposition': f'attachment; filename="{fname}"'
+                'Content-Disposition': f'attachment; filename=\"{fname}\"'
             }
 
     return jsonify({'error': 'Invalid format'}), 400
