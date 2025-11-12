@@ -1,0 +1,468 @@
+{% extends "base.html" %}
+
+{% block title %}LLM Responses - KnockKnock Intelligence{% endblock %}
+
+{% block content %}
+<!-- Header -->
+<div class="review-header">
+  <div class="header-content">
+    <div class="header-left">
+      <h1 class="page-title"><i class="fas fa-brain"></i> LLM Responses</h1>
+      <p class="page-subtitle">
+        Runs Knowledge Base queries for approved questions and shows results as they return.
+      </p>
+    </div>
+    <div class="header-actions">
+      <a href="{{ url_for('review', job_id=job_id) }}" class="btn btn-secondary">
+        <i class="fas fa-arrow-left"></i> Back to Review
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- Controls / Progress -->
+<div class="card filters-section">
+  <div class="filters-header">
+    <h3 class="filters-title">
+      <i class="fas fa-robot"></i> Run Queries
+    </h3>
+    <div class="filters-actions">
+      <button id="btnRun" class="btn btn-primary"><i class="fas fa-play"></i> Run KB</button>
+      <button id="btnRerunFailed" class="btn btn-warning"><i class="fas fa-redo"></i> Re-run Failed</button>
+      <button id="btnSaveAll" class="btn btn-success"><i class="fas fa-save"></i> Save All Changes</button>
+      <div class="btn-group">
+        <button class="btn btn-secondary" onclick="openExportModal()">
+          <i class="fas fa-download"></i> Export
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-icon"><i class="fas fa-list"></i></div>
+      <div class="metric-content">
+        <div class="metric-value" id="metricTotal">0</div>
+        <div class="metric-label">Approved Questions</div>
+      </div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-icon"><i class="fas fa-spinner"></i></div>
+      <div class="metric-content">
+        <div class="metric-value" id="metricInFlight">0</div>
+        <div class="metric-label">In Flight</div>
+      </div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-icon"><i class="fas fa-check-circle"></i></div>
+      <div class="metric-content">
+        <div class="metric-value" id="metricDone">0</div>
+        <div class="metric-label">Completed</div>
+      </div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-icon"><i class="fas fa-times-circle"></i></div>
+      <div class="metric-content">
+        <div class="metric-value" id="metricFailed">0</div>
+        <div class="metric-label">Failed</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Results Table -->
+<div class="card questions-section">
+  <div class="table-header">
+    <h3 class="table-title"><i class="fas fa-table"></i> Responses Table</h3>
+  </div>
+
+  <div class="table-container">
+    <table class="questions-table" id="respTable">
+      <thead>
+        <tr>
+          <th class="checkbox-col"><input type="checkbox" id="selectAllRows" onchange="toggleSelectAllRows()"></th>
+          <th class="question-col">Question</th>
+          <th class="question-col">Response</th>
+          <th class="type-col">Sources</th>
+          <th class="status-col">Status</th>
+          <th class="actions-col">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="respTbody">
+        <!-- rows are built dynamically -->
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Export Modal -->
+<div class="modal" id="exportModal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3 class="modal-title"><i class="fas fa-download"></i> Export Responses</h3>
+      <button class="modal-close" onclick="closeExportModal()"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="export-options">
+        <div class="export-format">
+          <h4>Export Format</h4>
+          <div class="format-options">
+            <label class="format-option">
+              <input type="radio" name="respFormat" value="docx" checked>
+              <span class="format-label"><i class="fas fa-file-word"></i> DOCX</span>
+            </label>
+            <label class="format-option">
+              <input type="radio" name="respFormat" value="xlsx">
+              <span class="format-label"><i class="fas fa-file-excel"></i> Excel</span>
+            </label>
+          </div>
+        </div>
+        <div class="export-filters">
+          <h4>Export Filters</h4>
+          <div class="filter-options">
+            <label class="filter-option">
+              <input type="checkbox" id="onlySuccessful">
+              <span>Only successful responses</span>
+            </label>
+            <label class="filter-option">
+              <input type="checkbox" id="onlySelected">
+              <span>Only selected rows</span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeExportModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmExportResponses()">
+        <i class="fas fa-download"></i> Export
+      </button>
+    </div>
+  </div>
+</div>
+
+<style>
+/* Reuse same tokens from your theme */
+.question-col textarea {
+  width: 100%;
+  min-height: 100px;
+  padding: 0.75rem;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  line-height: 1.4;
+  resize: vertical;
+}
+.source-pill {
+  display:inline-block; margin: 0 6px 6px 0; padding: 6px 10px;
+  border-radius: 999px; background: rgba(59,130,246,.15);
+  border: 1px solid var(--border);
+  font-size: .75rem; color: var(--text-primary);
+}
+.status-ok { color: var(--success); font-weight: 700; }
+.status-fail { color: var(--error); font-weight: 700; }
+.btn-icon-sm { width: 28px; height: 28px; font-size: .75rem; }
+.row-modified { outline: 2px dashed rgba(59,130,246,.45); outline-offset: 2px; }
+</style>
+
+<script>
+const JOB_ID = "{{ job_id }}";
+const URLS = {
+  approved: "{{ url_for('get_approved_questions', job_id=job_id) }}",
+  kbQuery: "{{ url_for('kb_query_one') }}",
+  save: "{{ url_for('save_responses', job_id=job_id) }}",
+  exportDocx: "{{ url_for('export_responses', job_id=job_id, format='docx') }}",
+  exportXlsx: "{{ url_for('export_responses', job_id=job_id, format='xlsx') }}"
+};
+
+let approvedQuestions = [];  // {qid, text, ...}
+let rowState = new Map();    // qid -> { status: 'idle'|'running'|'ok'|'fail', response, sources, error, modified }
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadApproved();
+  wireButtons();
+});
+
+function wireButtons() {
+  document.getElementById('btnRun').addEventListener('click', runAll);
+  document.getElementById('btnRerunFailed').addEventListener('click', rerunFailed);
+  document.getElementById('btnSaveAll').addEventListener('click', saveAll);
+}
+
+async function loadApproved() {
+  const res = await fetch(URLS.approved);
+  const data = await res.json();
+  approvedQuestions = Array.isArray(data) ? data : [];
+  document.getElementById('metricTotal').textContent = approvedQuestions.length;
+  buildRows(approvedQuestions);
+  updateProgress();
+}
+
+function buildRows(questions) {
+  const tbody = document.getElementById('respTbody');
+  tbody.innerHTML = '';
+
+  questions.forEach(q => {
+    const tr = document.createElement('tr');
+    tr.dataset.qid = q.qid;
+
+    tr.innerHTML = `
+      <td class="checkbox-col"><input type="checkbox" class="row-check"></td>
+      <td class="question-col">
+        <div class="question-content">
+          <div style="font-weight:600; margin-bottom:.35rem">${escapeHtml(q.text || 'N/A')}</div>
+          <div class="text-muted" style="font-size:.8rem">
+            <span class="type-badge type-${(q.type||'other').toLowerCase()}">${q.type || 'other'}</span>
+            ${q.section_path && q.section_path.length ? `<span class="source-pill">${escapeHtml(q.section_path[0])}</span>` : ''}
+          </div>
+        </div>
+      </td>
+      <td class="question-col">
+        <textarea class="resp-text" placeholder="(will appear as soon as the model responds)"></textarea>
+      </td>
+      <td class="type-col sources-cell"></td>
+      <td class="status-col"><span class="status-label">Idle</span></td>
+      <td class="actions-col">
+        <div class="action-buttons">
+          <button class="btn-icon btn-save btn-icon-sm" title="Save row" onclick="saveOne('${q.qid}')">
+            <i class="fas fa-save"></i>
+          </button>
+          <button class="btn-icon btn-delete btn-icon-sm" title="Delete row" onclick="deleteRow('${q.qid}')">
+            <i class="fas fa-trash"></i>
+          </button>
+        </div>
+      </td>
+    `;
+
+    tbody.appendChild(tr);
+    rowState.set(q.qid, { status:'idle', response:'', sources:[], error:null, modified:false, question:q });
+    tr.querySelector('.resp-text').addEventListener('input', () => {
+      tr.classList.add('row-modified');
+      rowState.get(q.qid).modified = true;
+      rowState.get(q.qid).response = tr.querySelector('.resp-text').value;
+    });
+  });
+}
+
+function toggleSelectAllRows() {
+  const master = document.getElementById('selectAllRows');
+  document.querySelectorAll('.row-check').forEach(cb => cb.checked = master.checked);
+}
+
+function selectedQids() {
+  return Array.from(document.querySelectorAll('.row-check:checked'))
+    .map(cb => cb.closest('tr').dataset.qid);
+}
+
+function updateProgress() {
+  let inFlight=0, done=0, fail=0;
+  for (const st of rowState.values()) {
+    if (st.status === 'running') inFlight++;
+    if (st.status === 'ok') done++;
+    if (st.status === 'fail') fail++;
+  }
+  document.getElementById('metricInFlight').textContent = inFlight;
+  document.getElementById('metricDone').textContent = done;
+  document.getElementById('metricFailed').textContent = fail;
+}
+
+async function runAll() {
+  const targets = approvedQuestions.map(q => q.qid);
+  await runBatch(targets);
+}
+
+async function rerunFailed() {
+  const targets = [...rowState.entries()]
+    .filter(([_, st]) => st.status === 'fail')
+    .map(([qid]) => qid);
+  if (targets.length === 0) {
+    showNotification('Nothing failed to re-run.', 'info');
+    return;
+  }
+  await runBatch(targets);
+}
+
+async function runBatch(qids) {
+  const CONCURRENCY = Math.max(2, Math.min(navigator.hardwareConcurrency || 4, 6));
+  const queue = [...qids];
+  const runners = new Array(CONCURRENCY).fill(null).map(() => runner(queue));
+  await Promise.allSettled(runners);
+}
+
+async function runner(queue) {
+  while (queue.length) {
+    const qid = queue.shift();
+    const st = rowState.get(qid);
+    if (!st) continue;
+
+    const tr = document.querySelector(`tr[data-qid="${qid}"]`);
+    setStatus(tr, 'running');
+
+    try {
+      const qText = (st.question && st.question.text) || '';
+      const payload = {
+        query: qText,
+        max_results: 5,
+        temperature: 0.1,
+        max_tokens: 1500,
+        conversation_history: []
+      };
+      const res = await fetch(URLS.kbQuery, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(`KB ${res.status}`);
+
+      const data = await res.json();
+      const answer = data.response || '';
+      const sources = Array.isArray(data.sources) ? data.sources : [];
+      st.response = answer;
+      st.sources = sources;
+      st.status = 'ok';
+      st.error = null;
+
+      // write into row
+      tr.querySelector('.resp-text').value = answer;
+      renderSources(tr.querySelector('.sources-cell'), sources);
+      setStatus(tr, 'ok');
+    } catch (err) {
+      st.status = 'fail';
+      st.error = (err && err.message) || 'Error';
+      setStatus(tr, 'fail', st.error);
+    }
+    updateProgress();
+  }
+}
+
+function setStatus(tr, status, errMsg='') {
+  const label = tr.querySelector('.status-label');
+  if (status === 'running') {
+    label.textContent = 'Running…';
+    label.className = 'status-label';
+  } else if (status === 'ok') {
+    label.textContent = 'OK';
+    label.className = 'status-label status-ok';
+  } else if (status === 'fail') {
+    label.textContent = 'Failed';
+    label.title = errMsg;
+    label.className = 'status-label status-fail';
+  } else {
+    label.textContent = 'Idle';
+    label.className = 'status-label';
+  }
+}
+
+function renderSources(cell, sources) {
+  cell.innerHTML = '';
+  sources.forEach(s => {
+    const pill = document.createElement('span');
+    const name = (s.name || s.uri || 'source').toString();
+    pill.className = 'source-pill';
+    pill.textContent = name.length > 42 ? name.slice(0,39)+'…' : name;
+    pill.title = s.uri || s.content || '';
+    cell.appendChild(pill);
+  });
+}
+
+async function saveOne(qid) {
+  const tr = document.querySelector(`tr[data-qid="${qid}"]`);
+  const st = rowState.get(qid);
+  const payload = { responses: [{
+    qid,
+    text: (st.question && st.question.text) || '',
+    response: tr.querySelector('.resp-text').value || '',
+    status: st.status || 'ok',
+    sources: st.sources || []
+  }]};
+  const res = await fetch(URLS.save, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+  const data = await res.json();
+  if (data.success) {
+    tr.classList.remove('row-modified');
+    showNotification('Saved.', 'success');
+  } else {
+    showNotification('Save failed.', 'error');
+  }
+}
+
+async function saveAll() {
+  const body = { responses: [] };
+  document.querySelectorAll('#respTbody tr').forEach(tr => {
+    const qid = tr.dataset.qid;
+    const st = rowState.get(qid);
+    body.responses.push({
+      qid,
+      text: (st.question && st.question.text) || '',
+      response: tr.querySelector('.resp-text').value || '',
+      status: st.status || 'ok',
+      sources: st.sources || []
+    });
+  });
+  const res = await fetch(URLS.save, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  const data = await res.json();
+  if (data.success) showNotification(`Saved ${body.responses.length} rows.`, 'success');
+  else showNotification('Save failed.', 'error');
+}
+
+function deleteRow(qid) {
+  const tr = document.querySelector(`tr[data-qid="${qid}"]`);
+  if (!tr) return;
+  tr.remove();
+  rowState.delete(qid);
+  document.getElementById('metricTotal').textContent =
+    parseInt(document.getElementById('metricTotal').textContent,10) - 1;
+  updateProgress();
+}
+
+function openExportModal(){ document.getElementById('exportModal').classList.add('show'); }
+function closeExportModal(){ document.getElementById('exportModal').classList.remove('show'); }
+
+function confirmExportResponses() {
+  const fmt = document.querySelector('input[name="respFormat"]:checked').value;
+  const onlySuccess = document.getElementById('onlySuccessful').checked ? '1' : '';
+  const onlySel = document.getElementById('onlySelected').checked;
+
+  let url = (fmt === 'docx') ? URLS.exportDocx : URLS.exportXlsx;
+
+  const qs = new URLSearchParams();
+  if (onlySuccess) qs.set('success', 'true');
+
+  if (onlySel) {
+    const ids = selectedQids();
+    if (ids.length === 0) { alert('No rows selected.'); return; }
+    qs.set('qids', ids.join(','));
+  }
+
+  const f = qs.toString();
+  if (f) url += `?${f}`;
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.style.display='none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  closeExportModal();
+  showNotification('Export started.', 'success');
+}
+
+function toggleSelectAllRows(){ /* defined above */ }
+
+function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+function showNotification(message, type) {
+  const n = document.createElement('div');
+  n.className = `notification ${type}`;
+  n.textContent = message;
+  document.body.appendChild(n);
+  setTimeout(()=> n.classList.add('show'), 50);
+  setTimeout(()=>{
+    n.classList.remove('show');
+    setTimeout(()=> n.remove(), 300);
+  }, 3000);
+}
+</script>
+{% endblock %}
