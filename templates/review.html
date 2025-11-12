@@ -87,6 +87,11 @@
                 <i class="fas fa-download"></i>
                 Export Results
             </button>
+            <!-- NEW: Query KB button -->
+            <button class="btn btn-info" onclick="goToResponses()">
+                <i class="fas fa-brain"></i>
+                Query Knowledge Base
+            </button>
         </div>
     </div>
     
@@ -141,7 +146,7 @@
                 <i class="fas fa-check-square"></i>
                 Select All
             </button>
-            <!-- NEW: Bulk Approve button -->
+            <!-- Bulk Approve button -->
             <button class="btn btn-success" onclick="bulkApproveAll()">
                 <i class="fas fa-check-double"></i>
                 Approve All
@@ -210,7 +215,7 @@
     </div>
 </div>
 
-<!-- Export Modal (unchanged except IDs already present) -->
+<!-- Export Modal -->
 <div class="modal" id="exportModal">
     <div class="modal-content">
         <div class="modal-header">
@@ -402,7 +407,8 @@ const JOB_ID = "{{ job_id }}";
 const URLS = {
     saveEdits: "{{ url_for('save_edits', job_id=job_id) }}",
     exportDocx: "{{ url_for('export_data', job_id=job_id, format='docx') }}",
-    exportXlsx: "{{ url_for('export_data', job_id=job_id, format='xlsx') }}"
+    exportXlsx: "{{ url_for('export_data', job_id=job_id, format='xlsx') }}",
+    responsesPage: "{{ url_for('responses', job_id=job_id) }}"
 };
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -608,7 +614,7 @@ function updateMetrics() {
     document.getElementById('approvedCount').textContent = approvedCount;
 }
 
-/* NEW: Bulk Approve All */
+/* Bulk Approve All */
 function bulkApproveAll() {
     const rows = document.querySelectorAll('.question-row');
     if (rows.length === 0) {
@@ -627,8 +633,46 @@ function bulkApproveAll() {
     });
 
     updateMetrics();
-    // Persist immediately so export reflects approvals
+    // Persist immediately so responses page reflects approvals
     saveAllEdits();
+}
+
+/* NEW: Navigate to Responses (saves pending edits first) */
+async function goToResponses() {
+    const approvedCount = Array.from(document.querySelectorAll('.status-select'))
+        .filter(sel => sel.value === 'approved').length;
+
+    if (approvedCount === 0) {
+        const proceed = confirm("No rows are Approved. Continue to KB anyway?");
+        if (!proceed) return;
+    }
+
+    // Save modified rows before navigating so approvals are persisted
+    const modifiedRows = Array.from(document.querySelectorAll('.question-row.modified'));
+    if (modifiedRows.length > 0) {
+        const questions = modifiedRows.map(row => ({
+            qid: row.dataset.questionId,
+            text: row.querySelector('.question-text').value,
+            confidence: parseFloat(row.querySelector('.confidence-input').value),
+            status: row.querySelector('.status-select').value
+        }));
+        try {
+            const res = await fetch(URLS.saveEdits, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ questions })
+            });
+            const data = await res.json();
+            if (!data.success) {
+                showNotification('Failed to save pending edits; navigating anyway', 'error');
+            }
+        } catch (e) {
+            console.error(e);
+            showNotification('Error saving pending edits; navigating anyway', 'error');
+        }
+    }
+
+    window.location.href = URLS.responsesPage;
 }
 
 function showNotification(message, type) {
