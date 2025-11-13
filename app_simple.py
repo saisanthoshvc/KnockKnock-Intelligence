@@ -1,12 +1,16 @@
 import os
 import json
 import time
-import requests
+import io
 from datetime import datetime, timedelta
+
+import requests
 from flask import Flask, render_template, request, jsonify, redirect, url_for, send_file
 from werkzeug.utils import secure_filename
-import io
 
+# =========================================================
+# Flask app
+# =========================================================
 app = Flask(__name__)
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'your-secret-key-here')
 
@@ -20,21 +24,32 @@ ALLOWED_EXTENSIONS = {'docx', 'pdf', 'xlsx'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
 
-# ---------- Helpers to read env ----------
+# =========================================================
+# Helpers
+# =========================================================
 def env_int(name, default):
     try:
         return int(os.environ.get(name, default))
     except Exception:
         return default
 
-def env_bool(name, default=False):
-    val = str(os.environ.get(name, str(default))).lower()
-    return val in ('1', 'true', 'yes', 'on')
+def log_event(event, **kv):
+    """Prints structured JSON logs (friendly to Posit Connect)."""
+    try:
+        print(json.dumps({"event": event, **kv}))
+    except Exception:
+        print(f"[{event}] {kv}")
 
-# ---------- EXTRACTOR (existing RFP_* envs) ----------
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# =========================================================
+# EXTRACTOR (RFP) API CONFIG (unchanged from your setup)
+# =========================================================
 DEFAULT_API_CONFIG = {
     'base_url': os.environ.get(
-        'RFP_API_URL',  # typically https://connect.../content/<extract-guid>
+        'RFP_API_URL',
+        # Keep your previous default so existing extractor continues to work
         'https://connect.affiniusaiplatform.com/content/000d3572-937a-4d5c-ab7e-7ec80d80c4ce/'
     ),
     'api_key': os.environ.get('RFP_API_KEY', ''),
@@ -46,38 +61,191 @@ DEFAULT_API_CONFIG = {
 }
 api_config = DEFAULT_API_CONFIG.copy()
 
-# ---------- KNOWLEDGE BASE (new KK_* envs) ----------
-# You gave this GUID: 773611fa-272e-4c07-be28-74378b39af93
-KK_KB_CONTENT_GUID = os.environ.get('KK_KB_CONTENT_GUID', '')
-KK_KB_BASE = os.environ.get(
-    'KK_KB_BASE',
-    f"https://connect.affiniusaiplatform.com/content/{KK_KB_CONTENT_GUID}" if KK_KB_CONTENT_GUID else ''
-).rstrip('/')
+def get_auth_header():
+    """
+    Build extractor API auth header according to env:
+      - Authorization: Key <token>
+      - Authorization: Bearer <token>
+      - <custom-name>: <token>
+    """
+    hdr = api_config['header_name']
+    scheme = api_config['auth_scheme'].lower()
+    token = api_config['api_key']
 
-# Route can be auto-discovered from /openapi.json; env can override
-KK_KB_ROUTE = os.environ.get('KK_KB_ROUTE', '').strip()  # e.g. "/kb/query"
-KK_KB_TIMEOUT = env_int('KK_KB_TIMEOUT', 60)
+    if not token:
+        return {}
 
-# Optionally allow configuring Extractor via GUID too (keeps your RFP_API_URL working)
-KK_EXTRACT_CONTENT_GUID = os.environ.get('KK_EXTRACT_CONTENT_GUID', '')
-if KK_EXTRACT_CONTENT_GUID and not os.environ.get('RFP_API_URL'):
-    api_config['base_url'] = f"https://connect.affiniusaiplatform.com/content/{KK_EXTRACT_CONTENT_GUID}/"
+    if hdr.lower() == 'authorization':
+        if scheme == 'key':
+            return {'Authorization': f'Key {token}'}
+        elif scheme == 'bearer':
+            return {'Authorization': f'Bearer {token}'}
+        elif scheme == 'raw':
+            return {'Authorization': token}
+        else:
+            return {'Authorization': token}
+    else:
+        if scheme == 'raw':
+            return {hdr: token}
+        elif scheme in ('key', 'bearer'):
+            return {hdr: f'{scheme.title()} {token}'}
+        else:
+            return {hdr: token}
 
-# ---------- Simple logging helper ----------
-def log_event(event, **kv):
+def make_api_request(method, endpoint, **kwargs):
+    url = f"{api_config['base_url'].rstrip('/')}/{endpoint.strip('/')}"
+    headers = get_auth_header()
+    headers.update(kwargs.pop('headers', {}))
+
+    log_event("API_REQUEST_OUT", method=method.upper(), url=url, header_name=api_config['header_name'])
+
     try:
-        print(json.dumps({"event": event, **kv}))
-    except Exception:
-        print(f"[{event}] {kv}")
+        if method.upper() == 'GET':
+            resp = requests.get(url, headers=headers, timeout=api_config['request_timeout'])
+        elif method.upper() == 'POST':
+            resp = requests.post(url, headers=headers, timeout=api_config['request_timeout'], **kwargs)
+        elif method.upper() == 'DELETE':
+            resp = requests.delete(url, headers=headers, timeout=api_config['request_timeout'])
+        else:
+            return None
 
-# ---------- In-memory state ----------
-job_data = {}            # job_id -> {'status', 'questions', 'timestamp', ...}
-job_edits = {}           # job_id -> [edited question dicts]
-job_responses = {}       # job_id -> list of response dicts
-job_responses_edits = {} # job_id -> [ {qid, text, response, status, sources} ]
-_cached_kb_route = None  # memoized discovered route
+        # Detect redirect to login page (auth failure)
+        ct = resp.headers.get('Content-Type', '')
+        if ('text/html' in ct) and ('__login__' in resp.text.lower() or '<title>sign in' in resp.text.lower()):
+            class Dummy:
+                status_code = 401
+                text = "Not authorized: redirected to login page. Check RFP_API_* env vars."
+                def json(self): return {"error": self.text}
+            log_event("API_REQUEST_DONE", url=url, status_code=401)
+            return Dummy()
 
-# ---------- Stats helpers ----------
+        log_event("API_REQUEST_DONE", url=url, status_code=resp.status_code)
+        return resp
+    except requests.exceptions.RequestException as e:
+        log_event("API_REQUEST_ERROR", url=url, error=str(e))
+        return None
+
+# =========================================================
+# KB API CONFIG (NEW) — separate from extractor
+# =========================================================
+CONNECT_BASE = os.environ.get('CONNECT_BASE', 'https://connect.affiniusaiplatform.com').rstrip('/')
+
+KK_KB_CONTENT_GUID = os.environ.get('KK_KB_CONTENT_GUID', '').strip()
+KK_KB_BASE = (os.environ.get('KK_KB_BASE') or
+              (f"{CONNECT_BASE}/content/{KK_KB_CONTENT_GUID}" if KK_KB_CONTENT_GUID else '')).rstrip('/')
+
+# KB Auth (falls back to extractor creds if not provided)
+KK_KB_API_KEY = os.environ.get('KK_KB_API_KEY') or os.environ.get('RFP_API_KEY', '')
+KK_KB_KEY_HEADER_NAME = os.environ.get('KK_KB_KEY_HEADER_NAME', os.environ.get('RFP_API_KEY_HEADER_NAME', 'Authorization'))
+KK_KB_AUTH_SCHEME = os.environ.get('KK_KB_AUTH_SCHEME', os.environ.get('RFP_API_AUTH_SCHEME', 'Key'))
+KK_KB_TIMEOUT = env_int('KK_KB_TIMEOUT_SECONDS', 60)
+
+# Optional explicit route override; otherwise we discover from openapi.json
+KK_KB_ROUTE = os.environ.get('KK_KB_ROUTE', '').strip()
+
+_cached_kb_route = None  # cache discovered KB route
+
+def get_kb_auth_header():
+    """Auth header for the KB content; uses KB vars, falls back to extractor if unset."""
+    hdr = (KK_KB_KEY_HEADER_NAME or 'Authorization').strip()
+    scheme = (KK_KB_AUTH_SCHEME or 'Key').lower()
+    token = KK_KB_API_KEY
+
+    if not token:
+        return {}
+
+    if hdr.lower() == 'authorization':
+        if scheme == 'key':
+            return {'Authorization': f'Key {token}'}
+        if scheme == 'bearer':
+            return {'Authorization': f'Bearer {token}'}
+        if scheme == 'raw':
+            return {'Authorization': token}
+        return {'Authorization': token}
+    else:
+        if scheme == 'raw':
+            return {hdr: token}
+        if scheme in ('key', 'bearer'):
+            return {hdr: f'{scheme.title()} {token}'}
+        return {hdr: token}
+
+def kb_health():
+    if not KK_KB_BASE:
+        log_event("KB_HEALTH_SKIP", reason="KB base not configured")
+        return 503, "KB base not configured"
+    try:
+        url = f"{KK_KB_BASE}/health/ready"
+        log_event("KB_HEALTH_OUT", url=url)
+        r = requests.get(url, headers=get_kb_auth_header(), timeout=15)
+        log_event("KB_HEALTH_BACK", status=r.status_code, ct=r.headers.get('Content-Type',''))
+        return r.status_code, r.text
+    except Exception as e:
+        log_event("KB_HEALTH_ERR", error=str(e))
+        return 503, str(e)
+
+def discover_kb_route():
+    """Return a KB route string like '/kb/query' by inspecting openapi.json, or env override."""
+    global _cached_kb_route
+    if _cached_kb_route:
+        return _cached_kb_route
+
+    if KK_KB_ROUTE:
+        route = KK_KB_ROUTE if KK_KB_ROUTE.startswith('/') else f"/{KK_KB_ROUTE}"
+        _cached_kb_route = route
+        log_event("KB_ROUTE_FROM_ENV", route=route)
+        return route
+
+    if not KK_KB_BASE:
+        log_event("KB_ROUTE_SKIP", reason="KB base not configured")
+        return None
+
+    spec_url = f"{KK_KB_BASE}/openapi.json"
+    try:
+        log_event("KB_OPENAPI_OUT", url=spec_url)
+        spec = requests.get(spec_url, headers=get_kb_auth_header(), timeout=15)
+        log_event("KB_OPENAPI_BACK", status=spec.status_code, ct=spec.headers.get('Content-Type',''))
+
+        if spec.status_code != 200:
+            return None
+
+        js = spec.json()
+        paths = js.get("paths", {})
+        # Common candidates — adjust if your spec differs
+        candidates = ["/kb/query", "/kb/query-one", "/kb/query_batch", "/api/kb/query", "/query"]
+
+        for p in candidates:
+            if p in paths:
+                _cached_kb_route = p
+                os.environ["KK_KB_ROUTE"] = p  # helpful in later logs
+                log_event("KB_ROUTE_DISCOVERED", route=p)
+                return p
+
+        # Fallback: first POST path we find
+        for p, meta in paths.items():
+            methods = {k.lower() for k in meta.keys()}
+            if "post" in methods:
+                _cached_kb_route = p
+                os.environ["KK_KB_ROUTE"] = p
+                log_event("KB_ROUTE_FALLBACK", route=p)
+                return p
+
+    except Exception as e:
+        log_event("KB_OPENAPI_ERR", error=str(e))
+
+    log_event("KB_ROUTE_NONE")
+    return None
+
+# =========================================================
+# In-memory state
+# =========================================================
+job_data = {}                # job_id -> {'status', 'questions', 'timestamp', ...}
+job_edits = {}               # job_id -> [edited question dicts]
+job_responses = {}           # job_id -> list (optional cache)
+job_responses_edits = {}     # job_id -> [ {qid, text, response, status, sources} ]
+
+# =========================================================
+# Stats helpers
+# =========================================================
 def load_stats():
     try:
         if os.path.exists(STATS_FILE):
@@ -122,115 +290,13 @@ def update_stats(questions_count, processing_time, questions_data=None):
         stats["accuracy_rate"] = round((total_conf / n) * 100, 1) if n else stats.get("accuracy_rate", 85.0)
     else:
         stats["accuracy_rate"] = max(stats.get("accuracy_rate", 0.0), 85.0)
+
     save_stats(stats)
     return stats
 
-# ---------- Utilities ----------
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-def get_auth_header():
-    """
-    Build auth header according to env:
-      - Authorization: Key <token>
-      - Authorization: Bearer <token>
-      - <custom-name>: <token>
-    """
-    hdr = api_config['header_name']
-    scheme = api_config['auth_scheme'].lower()
-    token = api_config['api_key']
-    if not token:
-        return {}
-    if hdr.lower() == 'authorization':
-        if scheme == 'key':
-            return {'Authorization': f'Key {token}'}
-        if scheme == 'bearer':
-            return {'Authorization': f'Bearer {token}'}
-        if scheme == 'raw':
-            return {'Authorization': token}
-        return {'Authorization': token}
-    else:
-        if scheme == 'raw':
-            return {hdr: token}
-        if scheme in ('key', 'bearer'):
-            return {hdr: f'{scheme.title()} {token}'}
-        return {hdr: token}
-
-def make_api_request(base_url, method, endpoint, **kwargs):
-    url = f"{base_url.rstrip('/')}/{endpoint.strip('/')}"
-    headers = get_auth_header()
-    headers.update(kwargs.pop('headers', {}))
-    log_event("API_REQUEST_OUT", method=method.upper(), url=url, header_name=api_config['header_name'])
-    try:
-        if method.upper() == 'GET':
-            resp = requests.get(url, headers=headers, timeout=api_config['request_timeout'])
-        elif method.upper() == 'POST':
-            resp = requests.post(url, headers=headers, timeout=api_config['request_timeout'], **kwargs)
-        elif method.upper() == 'DELETE':
-            resp = requests.delete(url, headers=headers, timeout=api_config['request_timeout'])
-        else:
-            return None
-
-        # Detect redirect to login page (auth failure)
-        ct = resp.headers.get('Content-Type', '')
-        if ('text/html' in ct) and ('__login__' in resp.text.lower() or '<title>sign in' in resp.text.lower()):
-            class Dummy:
-                status_code = 401
-                text = "Not authorized: redirected to login page. Check RFP_API_* env vars."
-                def json(self): return {"error": self.text}
-            log_event("API_REQUEST_DONE", url=url, status_code=401)
-            return Dummy()
-
-        log_event("API_REQUEST_DONE", url=url, status_code=resp.status_code)
-        return resp
-    except requests.exceptions.RequestException as e:
-        log_event("API_REQUEST_ERROR", url=url, error=str(e))
-        return None
-
-# ---------- KB helpers ----------
-def kb_health():
-    if not KK_KB_BASE:
-        return 503, "KB base not configured"
-    try:
-        r = requests.get(f"{KK_KB_BASE}/health/ready", headers=get_auth_header(), timeout=15)
-        return r.status_code, r.text
-    except Exception as e:
-        return 503, str(e)
-
-def discover_kb_route():
-    """Return a KB route string like '/kb/query' by inspecting openapi.json, or env override."""
-    global _cached_kb_route
-    if _cached_kb_route:
-        return _cached_kb_route
-    if KK_KB_ROUTE:
-        _cached_kb_route = KK_KB_ROUTE if KK_KB_ROUTE.startswith('/') else f"/{KK_KB_ROUTE}"
-        return _cached_kb_route
-    if not KK_KB_BASE:
-        return None
-    try:
-        spec = requests.get(f"{KK_KB_BASE}/openapi.json", headers=get_auth_header(), timeout=15)
-        if spec.status_code != 200:
-            return None
-        paths = spec.json().get("paths", {})
-        # Preference order
-        candidates = ["/kb/query", "/kb/query-one", "/kb/query_batch", "/api/kb/query", "/query"]
-        for p in candidates:
-            if p in paths:
-                _cached_kb_route = p
-                # Write back to env so logs show it
-                os.environ["KK_KB_ROUTE"] = p
-                return p
-        # If not found, take any POST path as a fallback
-        for p, meta in paths.items():
-            if "post" in {k.lower() for k in meta.keys()}:
-                _cached_kb_route = p
-                os.environ["KK_KB_ROUTE"] = p
-                return p
-    except Exception:
-        return None
-    return None
-
-# ---------- Request logging ----------
+# =========================================================
+# Request logging
+# =========================================================
 @app.before_request
 def _log_in():
     log_event("HTTP_IN", method=request.method, path=request.path)
@@ -240,46 +306,27 @@ def _log_out(response):
     log_event("HTTP_OUT", status=response.status_code, path=request.path)
     return response
 
-# ---------- Merge helpers ----------
-def merge_questions_with_edits(job_id):
-    original = job_data.get(job_id, {}).get('questions', []) or []
-    edits = job_edits.get(job_id, []) or []
-    edits_by_id = {q.get('qid') or q.get('id') or q.get('question_id'): q for q in edits}
-
-    def norm(q):
-        q = dict(q or {})
-        q['qid'] = q.get('qid') or q.get('id') or q.get('question_id')
-        status = (q.get('status') or '').strip().lower()
-        if status not in ('approved', 'pending', 'rejected'):
-            status = 'pending'
-        q['status'] = status
-        return q
-
-    merged = []
-    for oq in original:
-        base = norm(oq)
-        ov = edits_by_id.get(base['qid'])
-        if ov:
-            ov = norm(ov)
-            for k in ('text','confidence','status','type','section_path','numbering','category'):
-                if ov.get(k) not in (None, '', []):
-                    base[k] = ov.get(k)
-        merged.append(base)
-    return merged
-
-# ---------- Routes ----------
+# =========================================================
+# Routes
+# =========================================================
 @app.route('/')
 def index():
-    # Extractor health
-    health = make_api_request(api_config['base_url'], 'GET', 'health/ready')
+    # Probe extractor readiness
+    health = make_api_request('GET', 'health/ready')
     if health and health.status_code == 200:
         log_event("UPSTREAM_HEALTH_OK", endpoint="extract/health/ready")
-    # KB health + route discovery
-    kb_status, _ = kb_health()
+    else:
+        log_event("UPSTREAM_HEALTH_FAIL", status=(health.status_code if health else 'no-response'))
+
+    # Probe KB readiness + discover route (both just for logging/visibility)
+    kb_status, _kb_text = kb_health()
     kb_route = discover_kb_route()
+
     stats = load_stats()
-    log_event("ROUTE_INDEX", kb_status=kb_status, kb_route=kb_route or "(unset)")
-    # You can use kb_status/kb_route in your template to show a warning banner / disable Run KB button.
+    log_event("ROUTE_INDEX",
+              kb_status=kb_status,
+              kb_route=kb_route or "(unset)",
+              kb_base=KK_KB_BASE or "(unset)")
     return render_template('index.html', api_config=api_config, stats=stats)
 
 # ---- Upload & Extract ----
@@ -312,7 +359,7 @@ def upload_file():
             data = {'use_llm': 'true' if use_llm else 'false', 'mode': mode}
             endpoint = 'extract/sync' if use_sync else 'extract/'
             log_event("EXTRACT_CALL", endpoint=endpoint, mode=mode, use_llm=use_llm, use_sync=use_sync)
-            resp = make_api_request(api_config['base_url'], 'POST', endpoint, files=files, data=data)
+            resp = make_api_request('POST', endpoint, files=files, data=data)
 
         if not resp:
             log_event("EXTRACT_NO_RESPONSE")
@@ -369,13 +416,13 @@ def poll_job(job_id):
         log_event("POLL_ALREADY_DONE", job_id=job_id)
         return jsonify(job_data[job_id])
 
-    resp = make_api_request(api_config['base_url'], 'GET', f'jobs/{job_id}')
+    resp = make_api_request('GET', f'jobs/{job_id}')
     if not resp:
         log_event("POLL_API_FAIL", job_id=job_id)
         return jsonify({'error': 'Failed to poll job status'}), 502
 
     if resp.status_code == 404:
-        q = make_api_request(api_config['base_url'], 'GET', f'jobs/{job_id}/questions')
+        q = make_api_request('GET', f'jobs/{job_id}/questions')
         if q and q.status_code == 200:
             questions = q.json()
             job_data[job_id]['status'] = 'completed'
@@ -404,7 +451,7 @@ def poll_job(job_id):
             update_stats(len(qs), 30, qs)
             log_event("POLL_COMPLETED_INLINE", job_id=job_id, q=len(qs))
             return jsonify(data)
-        q = make_api_request(api_config['base_url'], 'GET', f'jobs/{job_id}/questions')
+        q = make_api_request('GET', f'jobs/{job_id}/questions')
         if q and q.status_code == 200:
             qs = q.json()
             job_data[job_id]['questions'] = qs
@@ -443,7 +490,7 @@ def get_job_questions(job_id):
     if job.get('status') == 'completed' and 'questions' in job:
         return jsonify(job['questions'])
 
-    resp = make_api_request(api_config['base_url'], 'GET', f'jobs/{job_id}/questions')
+    resp = make_api_request('GET', f'jobs/{job_id}/questions')
     if resp and resp.status_code == 200:
         questions = resp.json()
         job['questions'] = questions
@@ -459,7 +506,7 @@ def review(job_id):
     job = job_data[job_id]
     questions = job.get('questions') or []
     if not questions:
-        resp = make_api_request(api_config['base_url'], 'GET', f'jobs/{job_id}/questions')
+        resp = make_api_request('GET', f'jobs/{job_id}/questions')
         if resp and resp.status_code == 200:
             questions = resp.json()
             job['questions'] = questions
@@ -473,18 +520,18 @@ def save_edits(job_id):
     if job_id not in job_edits:
         job_edits[job_id] = []
 
-    index = {q.get('qid'): i for i, q in enumerate(job_edits[job_id])}
+    index_map = {q.get('qid'): i for i, q in enumerate(job_edits[job_id])}
     for q in incoming:
         qid = q.get('qid')
-        if qid in index:
-            job_edits[job_id][index[qid]] = q
+        if qid in index_map:
+            job_edits[job_id][index_map[qid]] = q
         else:
             job_edits[job_id].append(q)
 
     log_event("SAVE_EDITS", job_id=job_id, count=len(incoming))
     return jsonify({'success': True})
 
-# ---- Export questions (existing) ----
+# ---- Export questions (docx/xlsx) ----
 @app.route('/api/export/<job_id>/<format>')
 def export_data(job_id, format):
     if job_id not in job_data:
@@ -541,6 +588,7 @@ def export_data(job_id, format):
             doc.add_paragraph(f'Job ID: {job_id}')
             doc.add_paragraph(f'Total Questions: {len(questions)}')
             doc.add_paragraph('')
+
             for i, q in enumerate(questions, 1):
                 doc.add_heading(f'Question {i}', level=2)
                 doc.add_paragraph(f'Text: {q.get("text","N/A")}')
@@ -550,11 +598,15 @@ def export_data(job_id, format):
                 section = (q.get("section_path") or ["N/A"])[0] if q.get("section_path") else "N/A"
                 doc.add_paragraph(f'Section: {section}')
                 doc.add_paragraph('')
+
             bio = io.BytesIO()
-            doc.save(bio); bio.seek(0)
+            doc.save(bio)
+            bio.seek(0)
             fname = f"RFP_Questions_Report_{datetime.now():%Y%m%d_%H%M%S}.docx"
-            return send_file(bio, as_attachment=True, download_name=fname,
-                             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+            return send_file(
+                bio, as_attachment=True, download_name=fname,
+                mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            )
         except ImportError:
             content = [
                 "RFP Questions Report",
@@ -575,7 +627,7 @@ def export_data(job_id, format):
             fname = f"RFP_Questions_Report_{datetime.now():%Y%m%d_%H%M%S}.txt"
             return body, 200, {
                 'Content-Type': 'text/plain',
-                'Content-Disposition': f'attachment; filename=\"{fname}\"'
+                'Content-Disposition': f'attachment; filename="{fname}"'
             }
 
     elif format == 'xlsx':
@@ -591,8 +643,10 @@ def export_data(job_id, format):
                 df.to_excel(w, sheet_name='RFP Questions', index=False)
             bio.seek(0)
             fname = f"RFP_Questions_Report_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
-            return send_file(bio, as_attachment=True, download_name=fname,
-                             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            return send_file(
+                bio, as_attachment=True, download_name=fname,
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            )
         except ImportError:
             import csv
             out = io.StringIO()
@@ -615,57 +669,98 @@ def export_data(job_id, format):
             fname = f"RFP_Questions_Report_{datetime.now():%Y%m%d_%H%M%S}.csv"
             return out.getvalue(), 200, {
                 'Content-Type': 'text/csv',
-                'Content-Disposition': f'attachment; filename=\"{fname}\"'
+                'Content-Disposition': f'attachment; filename="{fname}"'
             }
 
     return jsonify({'error': 'Invalid format'}), 400
 
-# ===================== KB + RESPONSES =====================
-
+# ===================== NEW: KB + RESPONSES =====================
 @app.route('/api/approved_questions/<job_id>')
 def get_approved_questions(job_id):
     if job_id not in job_data:
         return jsonify({'error':'Job not found'}), 404
-    merged = merge_questions_with_edits(job_id)
+
+    def merge_questions_with_edits(job_id_):
+        original = job_data.get(job_id_, {}).get('questions', []) or []
+        edits = job_edits.get(job_id_, []) or []
+        edits_by_id = {q.get('qid') or q.get('id') or q.get('question_id'): q for q in edits}
+        def norm(q):
+            q = dict(q or {})
+            q['qid'] = q.get('qid') or q.get('id') or q.get('question_id')
+            status = (q.get('status') or '').strip().lower()
+            if status not in ('approved', 'pending', 'rejected'):
+                status = 'pending'
+            q['status'] = status
+            return q
+        merged = []
+        for oq in original:
+            base = norm(oq)
+            ov = edits_by_id.get(base['qid'])
+            if ov:
+                ov = norm(ov)
+                for k in ('text','confidence','status','type','section_path','numbering','category'):
+                    if ov.get(k) not in (None, '', []):
+                        base[k] = ov.get(k)
+            merged.append(base)
+        return merged
+
+    merged = get_approved_questions._merge_cache = locals().get('merge_questions_with_edits')(job_id)
     approved = [q for q in merged if q.get('status') == 'approved']
     return jsonify(approved)
 
-# Proxy a single KB query to upstream KB (correct base + discovered route)
+# ---- KB proxy (DROP-IN) ----
 @app.route('/api/kb/query-one', methods=['POST'])
 def kb_query_one():
     if not KK_KB_BASE:
+        log_event("KB_CALL_BLOCKED", reason="KB base not configured")
         return jsonify({'error': 'Knowledge Base not configured: set KK_KB_CONTENT_GUID or KK_KB_BASE'}), 503
 
     route = discover_kb_route()
     if not route:
-        return jsonify({'error': 'KB route could not be determined. Set KK_KB_ROUTE or ensure openapi.json is accessible.'}), 404
+        log_event("KB_CALL_BLOCKED", reason="KB route unresolved")
+        return jsonify({'error': 'KB route could not be determined. Set KK_KB_ROUTE or ensure /openapi.json is accessible.'}), 404
 
     payload = request.get_json() or {}
+
+    # Be generous with field names to match various KB schemas
+    question = payload.get("query") or payload.get("question") or ""
+    top_k = int(payload.get("max_results", payload.get("top_k", 5)))
+    temperature = float(payload.get("temperature", 0.1))
+    max_tokens = int(payload.get("max_tokens", 1500))
+    conversation_history = payload.get("conversation_history") or []
+    model = payload.get("model")  # optional passthrough
+
     body = {
-        # Map your UI fields to KB API payload; adjust if your KB expects different keys
-        "question": payload.get("query", "") or payload.get("question", ""),
-        "top_k": int(payload.get("max_results", 5)),
-        "temperature": float(payload.get("temperature", 0.1)),
-        "max_tokens": int(payload.get("max_tokens", 1500)),
-        "conversation_history": payload.get("conversation_history") or []
+        "query": question,
+        "question": question,       # include both for compatibility
+        "top_k": top_k,
+        "max_results": top_k,       # include both for compatibility
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "conversation_history": conversation_history
     }
+    if model:
+        body["model"] = model
 
-    # Some KBs want "query" not "question" — send both keys to be safe
-    body["query"] = body.get("question", body.get("query", ""))
+    url = f"{KK_KB_BASE}{route}"
+    headers = get_kb_auth_header()
 
-    kb_headers = get_auth_header()
+    log_event("KB_REQUEST_OUT",
+              url=url, route=route, kb_base=KK_KB_BASE,
+              hdr=list(headers.keys()), body_keys=list(body.keys()))
+
     try:
-        url = f"{KK_KB_BASE}{route}"
-        r = requests.post(url, json=body, headers=kb_headers, timeout=KK_KB_TIMEOUT)
+        r = requests.post(url, json=body, headers=headers, timeout=KK_KB_TIMEOUT)
     except requests.exceptions.RequestException as e:
+        log_event("KB_REQUEST_ERR", error=str(e))
         return jsonify({'error': f'KB request failed: {e}'}), 502
 
-    # Do NOT mask 404 as 502; bubble it up so you see misconfig clearly
+    log_event("KB_REQUEST_BACK", status=r.status_code, ct=r.headers.get('Content-Type',''))
+
     if r.status_code == 404:
         return jsonify({'error': f'KB route not found on this content (404). Tried {route}. '
                                  f'Override KK_KB_ROUTE or check /openapi.json.'}), 404
 
-    # Pass through other errors
     if r.status_code >= 400:
         try:
             return jsonify(r.json()), r.status_code
@@ -673,11 +768,11 @@ def kb_query_one():
             return jsonify({'error': r.text}), r.status_code
 
     try:
-        data = r.json()
+        return jsonify(r.json()), 200
     except Exception:
-        data = {"raw": r.text}
-    return jsonify(data), 200
+        return jsonify({"raw": r.text}), 200
 
+# ---- Save edited KB responses ----
 @app.route('/api/responses/save/<job_id>', methods=['POST'])
 def save_responses(job_id):
     data = request.get_json() or {}
@@ -695,6 +790,7 @@ def save_responses(job_id):
     log_event("SAVE_RESPONSES", job_id=job_id, count=len(incoming))
     return jsonify({'success': True})
 
+# ---- Responses UI page ----
 @app.route('/responses/<job_id>')
 def responses(job_id):
     if job_id not in job_data:
@@ -703,13 +799,38 @@ def responses(job_id):
         job_responses[job_id] = []
     return render_template('llm_responses.html', job_id=job_id)
 
+# ---- Export KB responses (docx/xlsx) ----
 @app.route('/api/export_responses/<job_id>/<format>')
 def export_responses(job_id, format):
     if job_id not in job_data:
         return jsonify({'error': 'Job not found'}), 404
 
-    approved = merge_questions_with_edits(job_id)
-    approved = [q for q in approved if q.get('status') == 'approved']
+    # base from approved questions
+    def merge_questions_with_edits(job_id_):
+        original = job_data.get(job_id_, {}).get('questions', []) or []
+        edits = job_edits.get(job_id_, []) or []
+        edits_by_id = {q.get('qid') or q.get('id') or q.get('question_id'): q for q in edits}
+        def norm(q):
+            q = dict(q or {})
+            q['qid'] = q.get('qid') or q.get('id') or q.get('question_id')
+            status = (q.get('status') or '').strip().lower()
+            if status not in ('approved', 'pending', 'rejected'):
+                status = 'pending'
+            q['status'] = status
+            return q
+        merged = []
+        for oq in original:
+            base = norm(oq)
+            ov = edits_by_id.get(base['qid'])
+            if ov:
+                ov = norm(ov)
+                for k in ('text','confidence','status','type','section_path','numbering','category'):
+                    if ov.get(k) not in (None, '', []):
+                        base[k] = ov.get(k)
+            merged.append(base)
+        return merged
+
+    approved = [q for q in merge_questions_with_edits(job_id) if q.get('status') == 'approved']
 
     edits = job_responses_edits.get(job_id, []) or []
     by_id = {e.get('qid'): e for e in edits}
@@ -747,13 +868,14 @@ def export_responses(job_id, format):
             doc.add_paragraph(f'Job ID: {job_id}')
             doc.add_paragraph(f'Total Responses: {len(rows)}')
             doc.add_paragraph('')
+
             for i, r in enumerate(rows, 1):
                 doc.add_heading(f'Item {i}', level=2)
-                doc.add_paragraph(f'Question: {r["question"]}')
-                doc.add_paragraph(f'Response: {r["response"] or "(empty)"}')
-                doc.add_paragraph(f'Status: {r["status"].title()}')
-                doc.add_paragraph(f'Type: {r["type"] or "N/A"}')
-                doc.add_paragraph(f'Section: {r["section"] or "N/A"}')
+                doc.add_paragraph(f'Question: {r['question']}")
+                doc.add_paragraph(f"Response: {r.get('response') or '(empty)'}")
+                doc.add_paragraph(f"Status: {r.get('status','ok').title()}")
+                doc.add_paragraph(f"Type: {r.get('type') or 'N/A'}")
+                doc.add_paragraph(f"Section: {r.get('section') or 'N/A'}")
                 if r['sources']:
                     doc.add_paragraph('Sources:')
                     for s in r['sources']:
@@ -762,11 +884,12 @@ def export_responses(job_id, format):
                         line = f"- {name}" + (f" ({uri})" if uri else "")
                         doc.add_paragraph(line)
                 doc.add_paragraph('')
+
             bio = io.BytesIO()
             doc.save(bio); bio.seek(0)
             fname = f"RFP_KB_Responses_{_dt.now():%Y%m%d_%H%M%S}.docx"
             return send_file(bio, as_attachment=True, download_name=fname,
-                             mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+                mimetype='application/vnd.openxmlformats-officedocument.wordprocessingml.document')
         except ImportError:
             return jsonify({'error':'python-docx not installed on server'}), 500
 
@@ -794,14 +917,28 @@ def export_responses(job_id, format):
             from datetime import datetime as _dt
             fname = f"RFP_KB_Responses_{_dt.now():%Y%m%d_%H%M%S}.xlsx"
             return send_file(bio, as_attachment=True, download_name=fname,
-                             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+                mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
         except ImportError:
             return jsonify({'error':'pandas/openpyxl not installed on server'}), 500
 
     return jsonify({'error': 'Invalid format'}), 400
 
-# ===================== END KB =====================
+# ---- Quick KB config debug ----
+@app.route('/api/kb/debug')
+def kb_debug():
+    route = discover_kb_route()
+    return jsonify({
+        "KK_KB_BASE": KK_KB_BASE or "(unset)",
+        "KK_KB_CONTENT_GUID": KK_KB_CONTENT_GUID or "(unset)",
+        "KK_KB_ROUTE": route or "(unset)",
+        "KB_AUTH_HEADER_NAME": KK_KB_KEY_HEADER_NAME,
+        "KB_AUTH_SCHEME": KK_KB_AUTH_SCHEME,
+        "KB_KEY_PRESENT": bool(KK_KB_API_KEY),
+    })
 
+# =========================================================
+# Entrypoint
+# =========================================================
 if __name__ == '__main__':
     print("Starting RFP Extraction App on port 5002...")
     print("Open your browser at http://localhost:5002")
