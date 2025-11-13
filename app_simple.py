@@ -871,7 +871,7 @@ def export_responses(job_id, format):
 
             for i, r in enumerate(rows, 1):
                 doc.add_heading(f'Item {i}', level=2)
-                doc.add_paragraph(f'Question: {r['question']}")
+                doc.add_paragraph(f"Question: {r['question']}")
                 doc.add_paragraph(f"Response: {r.get('response') or '(empty)'}")
                 doc.add_paragraph(f"Status: {r.get('status','ok').title()}")
                 doc.add_paragraph(f"Type: {r.get('type') or 'N/A'}")
