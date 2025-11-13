@@ -247,13 +247,14 @@
         padding: 3rem;
         margin-bottom: 2.5rem;
         box-shadow: var(--shadow-xl);
-        /* no crazy movement to avoid overlapping */
         transition:
             box-shadow 0.5s cubic-bezier(0.4, 0, 0.2, 1),
             border-color 0.5s cubic-bezier(0.4, 0, 0.2, 1),
             background 0.5s cubic-bezier(0.4, 0, 0.2, 1);
         position: relative;
-        overflow: hidden;
+        overflow: visible;
+        z-index: 1;
+        isolation: isolate;
     }
 
     .card:hover {
@@ -261,11 +262,19 @@
         box-shadow: var(--shadow-2xl);
         border-color: var(--border-hover);
         background: var(--glass-hover);
+        z-index: 2;
     }
 
     /* a bit more spacing between "Run Queries" and the table, just in case */
     .filters-section {
         margin-bottom: 3rem;
+        position: relative;
+        z-index: 1;
+    }
+
+    .questions-section {
+        position: relative;
+        z-index: 1;
     }
 
     .btn {
@@ -296,6 +305,7 @@
     .btn-primary:hover {
         transform: translateY(-4px) scale(1.05);
         box-shadow: 0 15px 35px rgba(59, 130, 246, 0.5);
+        will-change: transform;
     }
 
     .btn-secondary {
@@ -310,6 +320,7 @@
         border-color: var(--border-hover);
         transform: translateY(-3px);
         box-shadow: var(--shadow-lg);
+        will-change: transform;
     }
 
     .btn-success {
@@ -321,6 +332,7 @@
     .btn-success:hover {
         transform: translateY(-4px) scale(1.05);
         box-shadow: 0 15px 35px rgba(16, 185, 129, 0.5);
+        will-change: transform;
     }
 
     .btn-warning {
@@ -332,6 +344,7 @@
     .btn-warning:hover {
         transform: translateY(-4px) scale(1.05);
         box-shadow: 0 15px 35px rgba(245, 158, 11, 0.5);
+        will-change: transform;
     }
 
     .review-header { margin-bottom: 2rem; }
@@ -344,8 +357,8 @@
 
     .metrics-dashboard { margin-bottom: 2rem; }
     .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; }
-    .metric-card { display: flex; align-items: center; gap: 1rem; padding: 1.5rem; background: rgba(255,255,255,0.03); border-radius: 16px; border: 1px solid var(--border); transition: all .3s ease; }
-    .metric-card:hover { background: rgba(255,255,255,0.05); border-color: var(--border-hover); transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+    .metric-card { display: flex; align-items: center; gap: 1rem; padding: 1.5rem; background: rgba(255,255,255,0.03); border-radius: 16px; border: 1px solid var(--border); transition: all .3s ease; position: relative; }
+    .metric-card:hover { background: rgba(255,255,255,0.05); border-color: var(--border-hover); transform: translateY(-2px); box-shadow: var(--shadow-lg); will-change: transform; }
     .metric-icon { width: 50px; height: 50px; background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 1.25rem; box-shadow: var(--shadow); }
     .metric-content { flex: 1; }
     .metric-value { font-size: 2rem; font-weight: 800; color: var(--text-primary); margin-bottom: .25rem; background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
@@ -356,7 +369,6 @@
     .filters-title i { color: var(--accent-blue); }
     .filters-actions { display: flex; gap: 1rem; flex-wrap: wrap; }
 
-    .questions-section { margin-bottom: 2rem; }
     .table-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
     .table-title { font-size: 1.5rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: .75rem; }
     .table-title i { color: var(--accent-blue); }
