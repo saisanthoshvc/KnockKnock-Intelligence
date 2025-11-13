@@ -2,249 +2,451 @@
 {% block title %}LLM Responses - KnockKnock Intelligence{% endblock %}
 
 {% block content %}
-<div class="llm-responses-page">
-
-  <!-- Header (matches Review page) -->
-  <div class="review-header">
-    <div class="header-content">
-      <div class="header-left">
-        <h1 class="page-title">
-          <i class="fas fa-brain"></i>
-          LLM Responses
-        </h1>
-        <p class="page-subtitle">
-          Runs Knowledge Base queries for approved questions and shows results as they return.
-        </p>
-      </div>
-      <div class="header-actions">
-        <a href="{{ url_for('review', job_id=job_id) }}" class="btn btn-secondary">
-          <i class="fas fa-arrow-left"></i>
-          Back to Review
-        </a>
-      </div>
-    </div>
-  </div>
-
-  <!-- Controls / Progress -->
-  <div class="card filters-section">
-    <div class="filters-header">
-      <h3 class="filters-title">
-        <i class="fas fa-robot"></i>
-        Run Queries
-      </h3>
-      <div class="filters-actions">
-        <button id="btnRun" type="button" class="btn btn-primary">
-          <i class="fas fa-play"></i> Run KB
-        </button>
-        <button id="btnRerunFailed" type="button" class="btn btn-warning">
-          <i class="fas fa-redo"></i> Re-run Failed
-        </button>
-        <button id="btnSaveAll" type="button" class="btn btn-success">
-          <i class="fas fa-save"></i> Save All Changes
-        </button>
-        <button type="button" class="btn btn-secondary" onclick="openExportModal()">
-          <i class="fas fa-download"></i> Export
-        </button>
-      </div>
-    </div>
-
-    <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-icon"><i class="fas fa-list"></i></div>
-        <div class="metric-content">
-          <div class="metric-value" id="metricTotal">0</div>
-          <div class="metric-label">Approved Questions</div>
+<div class="container">
+    <main class="main-content">
+        <!-- Header -->
+        <div class="review-header">
+            <div class="header-content">
+                <div class="header-left">
+                    <h1 class="page-title">
+                        <i class="fas fa-brain"></i>
+                        LLM Responses
+                    </h1>
+                    <p class="page-subtitle">
+                        Runs Knowledge Base queries for approved questions and shows results as they return.
+                    </p>
+                </div>
+                <div class="header-actions">
+                    <a href="{{ url_for('review', job_id=job_id) }}" class="btn btn-secondary">
+                        <i class="fas fa-arrow-left"></i>
+                        Back to Review
+                    </a>
+                </div>
+            </div>
         </div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-icon"><i class="fas fa-spinner"></i></div>
-        <div class="metric-content">
-          <div class="metric-value" id="metricInFlight">0</div>
-          <div class="metric-label">In Flight</div>
-        </div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-icon"><i class="fas fa-check-circle"></i></div>
-        <div class="metric-content">
-          <div class="metric-value" id="metricDone">0</div>
-          <div class="metric-label">Completed</div>
-        </div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-icon"><i class="fas fa-times-circle"></i></div>
-        <div class="metric-content">
-          <div class="metric-value" id="metricFailed">0</div>
-          <div class="metric-label">Failed</div>
-        </div>
-      </div>
-    </div>
-  </div>
 
-  <!-- Results Table -->
-  <div class="card questions-section">
-    <div class="table-header">
-      <h3 class="table-title"><i class="fas fa-table"></i> Responses Table</h3>
-    </div>
-    <div class="table-container">
-      <table class="questions-table" id="respTable">
-        <thead>
-          <tr>
-            <th class="checkbox-col">
-              <input type="checkbox" id="selectAllRows" onchange="toggleSelectAllRows()">
-            </th>
-            <th class="question-col">Question</th>
-            <th class="question-col">Response</th>
-            <th class="type-col">Sources</th>
-            <th class="status-col">Status</th>
-            <th class="actions-col">Actions</th>
-          </tr>
-        </thead>
-        <tbody id="respTbody">
-          <!-- rows injected by JS -->
-        </tbody>
-      </table>
-    </div>
-  </div>
+        <!-- Controls / Progress -->
+        <div class="card filters-section">
+            <div class="filters-header">
+                <h3 class="filters-title">
+                    <i class="fas fa-robot"></i>
+                    Run Queries
+                </h3>
+                <div class="filters-actions">
+                    <button id="btnRun" type="button" class="btn btn-primary">
+                        <i class="fas fa-play"></i> Run KB
+                    </button>
+                    <button id="btnRerunFailed" type="button" class="btn btn-warning">
+                        <i class="fas fa-redo"></i> Re-run Failed
+                    </button>
+                    <button id="btnSaveAll" type="button" class="btn btn-success">
+                        <i class="fas fa-save"></i> Save All Changes
+                    </button>
+                    <button type="button" class="btn btn-secondary" onclick="handleExportClick()">
+                        <i class="fas fa-download"></i> Export
+                    </button>
+                </div>
+            </div>
 
-  <!-- Export Modal -->
-  <div class="modal" id="exportModal">
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <div class="metric-icon"><i class="fas fa-list"></i></div>
+                    <div class="metric-content">
+                        <div class="metric-value" id="metricTotal">0</div>
+                        <div class="metric-label">Approved Questions</div>
+                    </div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-icon"><i class="fas fa-spinner"></i></div>
+                    <div class="metric-content">
+                        <div class="metric-value" id="metricInFlight">0</div>
+                        <div class="metric-label">In Flight</div>
+                    </div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-icon"><i class="fas fa-check-circle"></i></div>
+                    <div class="metric-content">
+                        <div class="metric-value" id="metricDone">0</div>
+                        <div class="metric-label">Completed</div>
+                    </div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-icon"><i class="fas fa-times-circle"></i></div>
+                    <div class="metric-content">
+                        <div class="metric-value" id="metricFailed">0</div>
+                        <div class="metric-label">Failed</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Table -->
+        <div class="card questions-section">
+            <div class="table-header">
+                <h3 class="table-title">
+                    <i class="fas fa-table"></i>
+                    Responses Table
+                </h3>
+            </div>
+            <div class="table-container">
+                <table class="questions-table" id="respTable">
+                    <thead>
+                        <tr>
+                            <th class="checkbox-col">
+                                <input type="checkbox" id="selectAllRows" onchange="toggleSelectAllRows()">
+                            </th>
+                            <th class="question-col">Question</th>
+                            <th class="question-col">Response</th>
+                            <th class="type-col">Sources</th>
+                            <th class="status-col">Status</th>
+                            <th class="actions-col">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="respTbody"></tbody>
+                </table>
+            </div>
+        </div>
+    </main>
+</div>
+
+<!-- Export Modal -->
+<div class="modal" id="exportModal">
     <div class="modal-content">
-      <div class="modal-header">
-        <h3 class="modal-title"><i class="fas fa-download"></i> Export Responses</h3>
-        <button class="modal-close" type="button" onclick="closeExportModal()">
-          <i class="fas fa-times"></i>
-        </button>
-      </div>
-      <div class="modal-body">
-        <div class="export-options">
-          <div class="export-format">
-            <h4>Export Format</h4>
-            <div class="format-options">
-              <label class="format-option">
-                <input type="radio" name="respFormat" value="docx" checked>
-                <span class="format-label"><i class="fas fa-file-word"></i> DOCX</span>
-              </label>
-              <label class="format-option">
-                <input type="radio" name="respFormat" value="xlsx">
-                <span class="format-label"><i class="fas fa-file-excel"></i> Excel</span>
-              </label>
-            </div>
-          </div>
-          <div class="export-filters">
-            <h4>Export Filters</h4>
-            <div class="filter-options">
-              <label class="filter-option">
-                <input type="checkbox" id="onlySuccessful">
-                <span>Only successful responses</span>
-              </label>
-              <label class="filter-option">
-                <input type="checkbox" id="onlySelected">
-                <span>Only selected rows</span>
-              </label>
-            </div>
-          </div>
+        <div class="modal-header">
+            <h3 class="modal-title">
+                <i class="fas fa-download"></i>
+                Export Responses
+            </h3>
+            <button class="modal-close" type="button" onclick="closeExportModal()">
+                <i class="fas fa-times"></i>
+            </button>
         </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" type="button" onclick="closeExportModal()">Cancel</button>
-        <button class="btn btn-primary" type="button" onclick="confirmExportResponses()">
-          <i class="fas fa-download"></i> Export
-        </button>
-      </div>
+        <div class="modal-body">
+            <div class="export-options">
+                <div class="export-format">
+                    <h4>Export Format</h4>
+                    <div class="format-options">
+                        <label class="format-option">
+                            <input type="radio" name="respFormat" value="docx" checked>
+                            <span class="format-label">
+                                <i class="fas fa-file-word"></i> DOCX
+                            </span>
+                        </label>
+                        <label class="format-option">
+                            <input type="radio" name="respFormat" value="xlsx">
+                            <span class="format-label">
+                                <i class="fas fa-file-excel"></i> Excel
+                            </span>
+                        </label>
+                    </div>
+                </div>
+                <div class="export-filters">
+                    <h4>Export Filters</h4>
+                    <div class="filter-options">
+                        <label class="filter-option">
+                            <input type="checkbox" id="onlySuccessful">
+                            <span>Only successful responses</span>
+                        </label>
+                        <label class="filter-option">
+                            <input type="checkbox" id="onlySelected">
+                            <span>Only selected rows</span>
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" type="button" onclick="closeExportModal()">Cancel</button>
+            <button class="btn btn-primary" type="button" onclick="confirmExportResponses()">
+                <i class="fas fa-download"></i> Export
+            </button>
+        </div>
     </div>
-  </div>
-
-</div>  {# /.llm-responses-page #}
+</div>
 
 <style>
-/* Match Review page icon accent */
-.llm-responses-page .page-title i,
-.llm-responses-page .filters-title i,
-.llm-responses-page .table-title i {
-  color: var(--accent-blue);
-}
+    :root {
+        --primary-bg: #0a0e1a;
+        --secondary-bg: #111827;
+        --tertiary-bg: #1f2937;
+        --accent-blue: #3b82f6;
+        --accent-purple: #8b5cf6;
+        --accent-teal: #06d6a0;
+        --accent-pink: #f72585;
+        --accent-orange: #f97316;
+        --text-primary: #f8fafc;
+        --text-secondary: #cbd5e1;
+        --text-muted: #94a3b8;
+        --success: #10b981;
+        --warning: #f59e0b;
+        --error: #ef4444;
+        --border: rgba(255, 255, 255, 0.08);
+        --border-hover: rgba(59, 130, 246, 0.3);
+        --glass: rgba(17, 24, 39, 0.8);
+        --glass-hover: rgba(17, 24, 39, 0.9);
+        --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+        --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        --shadow-2xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        --shadow-glow: 0 0 20px rgba(59, 130, 246, 0.3);
+    }
 
-/* Stop cards from "jumping" and overlapping on hover */
-.llm-responses-page .card:hover {
-  transform: none !important;
-}
+    body {
+        background:
+            radial-gradient(ellipse at top, rgba(59, 130, 246, 0.15) 0%, transparent 50%),
+            radial-gradient(ellipse at bottom right, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
+            radial-gradient(ellipse at bottom left, rgba(6, 214, 160, 0.1) 0%, transparent 50%),
+            linear-gradient(135deg, var(--primary-bg) 0%, var(--secondary-bg) 100%);
+        background-attachment: fixed;
+        color: var(--text-primary);
+        min-height: 100vh;
+        overflow-x: hidden;
+        position: relative;
+        line-height: 1.6;
+        font-size: 14px;
+    }
 
-/* Keep your pills + row mark styling */
-.llm-responses-page .source-pill {
-  display:inline-block;
-  margin:0 6px 6px 0;
-  padding:6px 10px;
-  border-radius:999px;
-  background:rgba(59,130,246,.15);
-  border:1px solid var(--border);
-  font-size:.75rem;
-  color:var(--text-primary);
-}
+    body::before {
+        content: '';
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background:
+            radial-gradient(circle at 25% 25%, rgba(59, 130, 246, 0.2) 0%, transparent 50%),
+            radial-gradient(circle at 75% 75%, rgba(139, 92, 246, 0.2) 0%, transparent 50%),
+            radial-gradient(circle at 50% 50%, rgba(6, 214, 160, 0.15) 0%, transparent 50%);
+        animation: backgroundFloat 25s ease-in-out infinite;
+        z-index: -2;
+    }
 
-.llm-responses-page .status-ok {
-  color:var(--success);
-  font-weight:700;
-}
+    @keyframes backgroundFloat {
+        0%, 100% { transform: translateX(0) translateY(0) scale(1) rotate(0deg); opacity: 1; }
+        33% { transform: translateX(-30px) translateY(-20px) scale(1.1) rotate(120deg); opacity: 0.8; }
+        66% { transform: translateX(30px) translateY(20px) scale(0.9) rotate(240deg); opacity: 0.9; }
+    }
 
-.llm-responses-page .status-fail {
-  color:var(--error);
-  font-weight:700;
-}
+    .container {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 0 24px;
+    }
 
-.llm-responses-page .btn-icon-sm {
-  width:28px;
-  height:28px;
-  font-size:.75rem;
-}
+    .main-content {
+        padding: 3rem 0;
+        min-height: calc(100vh - 100px);
+    }
 
-.llm-responses-page .row-modified {
-  outline:2px dashed rgba(59,130,246,.45);
-  outline-offset:2px;
-}
+    .card {
+        background: var(--glass);
+        backdrop-filter: blur(25px) saturate(180%);
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        padding: 3rem;
+        margin-bottom: 2.5rem;
+        box-shadow: var(--shadow-xl);
+        /* no crazy movement to avoid overlapping */
+        transition:
+            box-shadow 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+            border-color 0.5s cubic-bezier(0.4, 0, 0.2, 1),
+            background 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
+        overflow: hidden;
+    }
 
-.llm-responses-page .question-col textarea {
-  width:100%;
-  min-height:100px;
-  padding:.75rem;
-  background:rgba(255,255,255,0.05);
-  border:1px solid var(--border);
-  border-radius:8px;
-  color:var(--text-primary);
-  font-size:.9rem;
-  line-height:1.4;
-  resize:vertical;
-}
+    .card:hover {
+        /* removed translate/scale so cards do NOT overlap each other */
+        box-shadow: var(--shadow-2xl);
+        border-color: var(--border-hover);
+        background: var(--glass-hover);
+    }
 
-/* Toast notifications */
-.notification {
-  position: fixed;
-  top: 20px;
-  right: 20px;
-  padding: 1rem 1.5rem;
-  border-radius: 12px;
-  color: #fff;
-  font-weight: 600;
-  z-index: 10000;
-  transform: translateX(100%);
-  transition: transform .3s ease;
-  max-width: 400px;
-  box-shadow: 0 10px 25px rgba(0,0,0,.3);
-}
-.notification.show { transform: translateX(0); }
-.notification.success {
-  background: linear-gradient(135deg, #10b981, #059669);
-}
-.notification.error {
-  background: linear-gradient(135deg, #ef4444, #dc2626);
-}
-.notification.info {
-  background: linear-gradient(135deg, #3b82f6, #2563eb);
-}
+    /* a bit more spacing between "Run Queries" and the table, just in case */
+    .filters-section {
+        margin-bottom: 3rem;
+    }
+
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 1rem 2rem;
+        border: none;
+        border-radius: 16px;
+        font-weight: 700;
+        font-size: 0.95rem;
+        text-decoration: none;
+        cursor: pointer;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        position: relative;
+        overflow: hidden;
+        white-space: nowrap;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .btn-primary {
+        background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple));
+        color: white;
+        box-shadow: 0 8px 25px rgba(59, 130, 246, 0.4);
+    }
+
+    .btn-primary:hover {
+        transform: translateY(-4px) scale(1.05);
+        box-shadow: 0 15px 35px rgba(59, 130, 246, 0.5);
+    }
+
+    .btn-secondary {
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--text-primary);
+        border: 1px solid var(--border);
+        backdrop-filter: blur(10px);
+    }
+
+    .btn-secondary:hover {
+        background: rgba(255, 255, 255, 0.15);
+        border-color: var(--border-hover);
+        transform: translateY(-3px);
+        box-shadow: var(--shadow-lg);
+    }
+
+    .btn-success {
+        background: linear-gradient(135deg, var(--success), var(--accent-teal));
+        color: white;
+        box-shadow: 0 8px 25px rgba(16, 185, 129, 0.4);
+    }
+
+    .btn-success:hover {
+        transform: translateY(-4px) scale(1.05);
+        box-shadow: 0 15px 35px rgba(16, 185, 129, 0.5);
+    }
+
+    .btn-warning {
+        background: linear-gradient(135deg, var(--warning), var(--accent-orange));
+        color: white;
+        box-shadow: 0 8px 25px rgba(245, 158, 11, 0.4);
+    }
+
+    .btn-warning:hover {
+        transform: translateY(-4px) scale(1.05);
+        box-shadow: 0 15px 35px rgba(245, 158, 11, 0.5);
+    }
+
+    .review-header { margin-bottom: 2rem; }
+    .header-content { display: flex; justify-content: space-between; align-items: flex-start; gap: 2rem; }
+    .header-left { flex: 1; }
+    .page-title { font-size: 2.5rem; font-weight: 800; margin-bottom: 0.5rem; display: flex; align-items: center; gap: 1rem; color: var(--text-primary); }
+    .page-title i { color: var(--accent-blue); font-size: 2rem; }
+    .page-subtitle { font-size: 1.125rem; color: var(--text-secondary); }
+    .header-actions { display: flex; gap: 1rem; align-items: center; }
+
+    .metrics-dashboard { margin-bottom: 2rem; }
+    .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1.5rem; }
+    .metric-card { display: flex; align-items: center; gap: 1rem; padding: 1.5rem; background: rgba(255,255,255,0.03); border-radius: 16px; border: 1px solid var(--border); transition: all .3s ease; }
+    .metric-card:hover { background: rgba(255,255,255,0.05); border-color: var(--border-hover); transform: translateY(-2px); box-shadow: var(--shadow-lg); }
+    .metric-icon { width: 50px; height: 50px; background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); border-radius: 12px; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 1.25rem; box-shadow: var(--shadow); }
+    .metric-content { flex: 1; }
+    .metric-value { font-size: 2rem; font-weight: 800; color: var(--text-primary); margin-bottom: .25rem; background: linear-gradient(135deg, var(--accent-blue), var(--accent-purple)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .metric-label { font-size: .875rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+
+    .filters-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; flex-wrap: wrap; gap: 1rem; }
+    .filters-title { font-size: 1.5rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: .75rem; }
+    .filters-title i { color: var(--accent-blue); }
+    .filters-actions { display: flex; gap: 1rem; flex-wrap: wrap; }
+
+    .questions-section { margin-bottom: 2rem; }
+    .table-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+    .table-title { font-size: 1.5rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: .75rem; }
+    .table-title i { color: var(--accent-blue); }
+    .table-container { overflow-x: auto; border-radius: 16px; border: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+    .questions-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+    .questions-table th { background: rgba(59,130,246,.1); color: var(--text-primary); font-weight: 700; padding: 1rem; text-align: left; border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: .5px; font-size: .8rem; }
+    .questions-table td { padding: 1rem; border-bottom: 1px solid rgba(255,255,255,.05); vertical-align: top; }
+    .question-row:hover { background: rgba(59,130,246,.05); }
+    .checkbox-col { width: 50px; text-align: center; }
+    .question-col { min-width: 300px; }
+    .question-content { display: flex; flex-direction: column; gap: .5rem; }
+    .resp-text { width: 100%; min-height: 100px; padding: .75rem; background: rgba(255,255,255,0.05); border: 1px solid var(--border); border-radius: 8px; color: var(--text-primary); font-size: .9rem; line-height: 1.4; resize: vertical; transition: all .3s ease; }
+    .resp-text:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 0 2px rgba(59,130,246,.1); }
+    .type-col { width: 120px; }
+    .sources-cell { min-width: 150px; max-width: 300px; }
+    .type-badge { display: inline-block; padding: .25rem .75rem; border-radius: 12px; font-size: .75rem; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+    .type-what { background: rgba(59,130,246,.2); color: var(--accent-blue); }
+    .type-how { background: rgba(16,185,129,.2); color: var(--success); }
+    .type-when { background: rgba(245,158,11,.2); color: var(--warning); }
+    .type-where { background: rgba(139,92,246,.2); color: var(--accent-purple); }
+    .type-why { background: rgba(239,68,68,.2); color: var(--error); }
+    .type-other { background: rgba(107,114,128,.2); color: var(--text-muted); }
+    .status-col { width: 120px; }
+    .status-label { font-weight: 600; color: var(--text-secondary); }
+    .status-ok { color: var(--success); font-weight: 700; }
+    .status-fail { color: var(--error); font-weight: 700; }
+    .actions-col { width: 100px; }
+    .action-buttons { display: flex; gap: .5rem; }
+    .btn-icon { width: 32px; height: 32px; border: none; border-radius: 6px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: .8rem; transition: all .3s ease; }
+    .btn-icon-sm { width: 28px; height: 28px; font-size: .75rem; }
+    .btn-save { background: rgba(16,185,129,.2); color: var(--success); border: 1px solid rgba(16,185,129,.3); }
+    .btn-save:hover { background: var(--success); color: #fff; transform: scale(1.1); }
+    .btn-delete { background: rgba(239,68,68,.2); color: var(--error); border: 1px solid rgba(239,68,68,.3); }
+    .btn-delete:hover { background: var(--error); color: #fff; transform: scale(1.1); }
+
+    .source-pill { display: inline-block; margin: 0 6px 6px 0; padding: 6px 10px; border-radius: 999px; background: rgba(59,130,246,.15); border: 1px solid var(--border); font-size: .75rem; color: var(--text-primary); }
+    .row-modified { outline: 2px dashed rgba(59,130,246,.45); outline-offset: 2px; }
+
+    .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,.8); backdrop-filter: blur(10px); z-index: 1000; align-items: center; justify-content: center; }
+    .modal.show { display: flex; }
+    .modal-content { background: var(--glass); backdrop-filter: blur(25px); border: 1px solid var(--border); border-radius: 20px; max-width: 500px; width: 90%; max-height: 80vh; overflow-y: auto; box-shadow: var(--shadow-2xl); }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 1.5rem; border-bottom: 1px solid var(--border); }
+    .modal-title { font-size: 1.25rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: .75rem; }
+    .modal-title i { color: var(--accent-blue); }
+    .modal-close { width: 32px; height: 32px; border: none; background: rgba(255,255,255,.1); border-radius: 6px; color: var(--text-secondary); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all .3s ease; }
+    .modal-close:hover { background: var(--error); color: #fff; }
+    .modal-body { padding: 1.5rem; }
+    .modal-footer { display: flex; justify-content: flex-end; gap: 1rem; padding: 1.5rem; border-top: 1px solid var(--border); }
+    .export-options { display: flex; flex-direction: column; gap: 2rem; }
+    .export-format h4, .export-filters h4 { font-size: 1rem; font-weight: 700; color: var(--text-primary); margin-bottom: 1rem; }
+    .format-options { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1rem; }
+    .format-option { display: flex; align-items: center; gap: .75rem; padding: 1rem; background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px; cursor: pointer; transition: all .3s ease; }
+    .format-option:hover { background: rgba(255,255,255,.05); border-color: var(--border-hover); }
+    .format-option input[type="radio"] { margin: 0; }
+    .format-label { display: flex; align-items: center; gap: .5rem; font-weight: 600; color: var(--text-primary); }
+    .format-label i { color: var(--accent-blue); }
+    .filter-options { display: flex; flex-direction: column; gap: 1rem; }
+    .filter-option { display: flex; align-items: center; gap: .75rem; padding: .75rem; background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; transition: all .3s ease; }
+    .filter-option:hover { background: rgba(255,255,255,.05); border-color: var(--border-hover); }
+    .filter-option input[type="checkbox"] { margin: 0; }
+
+    .notification { position: fixed; top: 20px; right: 20px; padding: 1rem 1.5rem; border-radius: 12px; color: #fff; font-weight: 600; z-index: 10000; transform: translateX(100%); transition: transform .3s ease; max-width: 400px; box-shadow: 0 10px 25px rgba(0,0,0,.3); }
+    .notification.show { transform: translateX(0); }
+    .notification.success { background: linear-gradient(135deg, #10b981, #059669); }
+    .notification.error { background: linear-gradient(135deg, #ef4444, #dc2626); }
+    .notification.info { background: linear-gradient(135deg, #3b82f6, #2563eb); }
+
+    @media (max-width: 1024px) {
+        .header-content { flex-direction: column; align-items: stretch; }
+        .header-actions { justify-content: flex-end; }
+        .metrics-grid { grid-template-columns: repeat(2, 1fr); }
+        .filters-actions { flex-direction: column; gap: .75rem; }
+    }
+
+    @media (max-width: 768px) {
+        .page-title { font-size: 2rem; }
+        .metrics-grid { grid-template-columns: 1fr; }
+        .questions-table { font-size: .8rem; }
+        .questions-table th, .questions-table td { padding: .75rem .5rem; }
+        .format-options { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 480px) {
+        .header-actions { flex-direction: column; gap: .75rem; }
+        .filters-actions { flex-direction: column; gap: .75rem; }
+    }
 </style>
 
 <script>
 const JOB_ID = "{{ job_id }}";
-
 const URLS = {
   approved: "{{ url_for('get_approved_questions', job_id=job_id) }}",
   kbQuery: "{{ url_for('kb_query_one') }}",
@@ -272,6 +474,8 @@ function wireButtons() {
   document.getElementById('btnSaveAll')?.addEventListener('click', () => saveAll(false));
 }
 
+// ---------- DATA LOADING ----------
+
 async function loadApproved() {
   const res = await fetch(URLS.approved);
   if (!res.ok) throw new Error('Failed to load approved questions');
@@ -285,32 +489,18 @@ async function loadApproved() {
 function buildRows(questions) {
   const tbody = document.getElementById('respTbody');
   tbody.innerHTML = '';
-
   questions.forEach(q => {
     const tr = document.createElement('tr');
-    tr.classList.add('question-row');
     tr.dataset.qid = q.qid;
-
-    const existingResp = q.response || '';
-
+    tr.classList.add('question-row');
     tr.innerHTML = `
-      <td class="checkbox-col">
-        <input type="checkbox" class="row-check">
-      </td>
+      <td class="checkbox-col"><input type="checkbox" class="row-check"></td>
       <td class="question-col">
         <div class="question-content">
-          <div style="font-weight:600; margin-bottom:.35rem">
-            ${escapeHtml(q.text || 'N/A')}
-          </div>
-          <div class="text-muted" style="font-size:.8rem">
-            <span class="type-badge type-${(q.type || 'other').toLowerCase()}">
-              ${q.type || 'other'}
-            </span>
-            ${
-              q.section_path && q.section_path.length
-                ? `<span class="source-pill">${escapeHtml(q.section_path[0])}</span>`
-                : ''
-            }
+          <div style="font-weight:600; margin-bottom:.35rem">${escapeHtml(q.text || 'N/A')}</div>
+          <div class="text-muted" style="font-size:.8rem; color: var(--text-muted);">
+            <span class="type-badge type-${(q.type||'other').toLowerCase()}">${q.type || 'other'}</span>
+            ${q.section_path && q.section_path.length ? `<span class="source-pill">${escapeHtml(q.section_path[0])}</span>` : ''}
           </div>
         </div>
       </td>
@@ -318,49 +508,41 @@ function buildRows(questions) {
         <textarea class="resp-text" placeholder="(will appear as soon as the model responds)"></textarea>
       </td>
       <td class="type-col sources-cell"></td>
-      <td class="status-col">
-        <span class="status-label">Idle</span>
-      </td>
+      <td class="status-col"><span class="status-label">Idle</span></td>
       <td class="actions-col">
         <div class="action-buttons">
-          <button class="btn-icon btn-save btn-icon-sm" type="button"
-                  title="Save row" onclick="saveOne('${q.qid}')">
+          <button class="btn-icon btn-save btn-icon-sm" type="button" title="Save row" onclick="saveOne('${q.qid}')">
             <i class="fas fa-save"></i>
           </button>
-          <button class="btn-icon btn-delete btn-icon-sm" type="button"
-                  title="Delete row" onclick="deleteRow('${q.qid}')">
+          <button class="btn-icon btn-delete btn-icon-sm" type="button" title="Delete row" onclick="deleteRow('${q.qid}')">
             <i class="fas fa-trash"></i>
           </button>
         </div>
       </td>
     `;
-
     tbody.appendChild(tr);
-
-    const st = {
+    rowState.set(q.qid, {
       status: 'idle',
-      response: existingResp,
+      response: '',
       sources: [],
       error: null,
       modified: false,
       question: q
-    };
-    rowState.set(q.qid, st);
-
-    const ta = tr.querySelector('.resp-text');
-    ta.value = existingResp;
-    ta.addEventListener('input', () => {
+    });
+    tr.querySelector('.resp-text').addEventListener('input', () => {
       tr.classList.add('row-modified');
+      const st = rowState.get(q.qid);
       st.modified = true;
-      st.response = ta.value;
+      st.response = tr.querySelector('.resp-text').value;
     });
   });
 }
 
+// ---------- SELECTION / METRICS ----------
+
 function toggleSelectAllRows() {
   const master = document.getElementById('selectAllRows');
-  document.querySelectorAll('.row-check')
-    .forEach(cb => cb.checked = master.checked);
+  document.querySelectorAll('.row-check').forEach(cb => cb.checked = master.checked);
 }
 
 function selectedQids() {
@@ -380,8 +562,14 @@ function updateProgress() {
   document.getElementById('metricFailed').textContent = fail;
 }
 
+// ---------- RUNNING QUERIES ----------
+
 async function runAll() {
   const ids = approvedQuestions.map(q => q.qid);
+  if (!ids.length) {
+    showNotification('No approved questions to run.', 'info');
+    return;
+  }
   await runBatch(ids);
 }
 
@@ -389,7 +577,6 @@ async function rerunFailed() {
   const ids = [...rowState.entries()]
     .filter(([_, st]) => st.status === 'fail')
     .map(([qid]) => qid);
-
   if (!ids.length) {
     showNotification('Nothing failed to re-run.', 'info');
     return;
@@ -410,9 +597,7 @@ async function runner(queue) {
     const tr = document.querySelector(`tr[data-qid="${qid}"]`);
     const st = rowState.get(qid);
     if (!tr || !st) continue;
-
     setStatus(tr, 'running');
-
     try {
       const payload = {
         query: (st.question && st.question.text) || '',
@@ -421,22 +606,17 @@ async function runner(queue) {
         max_tokens: 1500,
         conversation_history: []
       };
-
       const res = await fetch(URLS.kbQuery, {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-
       if (!res.ok) throw new Error(`KB ${res.status}`);
-
       const data = await res.json();
       st.response = data.response || '';
       st.sources = Array.isArray(data.sources) ? data.sources : [];
       st.status = 'ok';
-
-      const ta = tr.querySelector('.resp-text');
-      ta.value = st.response;
+      tr.querySelector('.resp-text').value = st.response;
       renderSources(tr.querySelector('.sources-cell'), st.sources);
       setStatus(tr, 'ok');
     } catch (e) {
@@ -444,21 +624,19 @@ async function runner(queue) {
       st.error = e.message;
       setStatus(tr, 'fail', e.message);
     }
-
     updateProgress();
   }
 }
 
 function setStatus(tr, status, errMsg = '') {
   const label = tr.querySelector('.status-label');
-  if (!label) return;
-
   if (status === 'running') {
     label.textContent = 'Running…';
     label.className = 'status-label';
   } else if (status === 'ok') {
     label.textContent = 'OK';
     label.className = 'status-label status-ok';
+    label.removeAttribute('title');
   } else if (status === 'fail') {
     label.textContent = 'Failed';
     label.title = errMsg;
@@ -466,6 +644,7 @@ function setStatus(tr, status, errMsg = '') {
   } else {
     label.textContent = 'Idle';
     label.className = 'status-label';
+    label.removeAttribute('title');
   }
 }
 
@@ -481,11 +660,12 @@ function renderSources(cell, sources) {
   });
 }
 
+// ---------- SAVING ----------
+
 async function saveOne(qid) {
   const tr = document.querySelector(`tr[data-qid="${qid}"]`);
   const st = rowState.get(qid);
   if (!tr || !st) return;
-
   const payload = {
     responses: [{
       qid,
@@ -495,33 +675,26 @@ async function saveOne(qid) {
       sources: st.sources || []
     }]
   };
-
-  try {
-    const res = await fetch(URLS.save, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const data = await res.json();
-    if (data.success) {
-      tr.classList.remove('row-modified');
-      showNotification('Saved.', 'success');
-    } else {
-      showNotification('Save failed.', 'error');
-    }
-  } catch (e) {
-    showNotification('Save failed: ' + e.message, 'error');
+  const res = await fetch(URLS.save, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (data.success) {
+    tr.classList.remove('row-modified');
+    showNotification('Saved.', 'success');
+  } else {
+    showNotification('Save failed.', 'error');
   }
 }
 
 async function saveAll(silent = false) {
   const body = { responses: [] };
-
   document.querySelectorAll('#respTbody tr').forEach(tr => {
     const qid = tr.dataset.qid;
     const st = rowState.get(qid);
     if (!st) return;
-
     body.responses.push({
       qid,
       text: (st.question && st.question.text) || '',
@@ -536,33 +709,20 @@ async function saveAll(silent = false) {
     return false;
   }
 
-  try {
-    const res = await fetch(URLS.save, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body)
-    });
-
-    if (!res.ok) {
-      if (!silent) showNotification('Save failed (HTTP error).', 'error');
-      return false;
+  const res = await fetch(URLS.save, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json();
+  if (data.success) {
+    if (!silent) {
+      showNotification(`Saved ${body.responses.length} rows.`, 'success');
     }
-
-    const data = await res.json();
-    if (data.success) {
-      if (!silent) {
-        showNotification(`Saved ${body.responses.length} rows.`, 'success');
-      }
-      document.querySelectorAll('#respTbody tr')
-        .forEach(tr => tr.classList.remove('row-modified'));
-      return true;
-    } else {
-      if (!silent) showNotification('Save failed.', 'error');
-      return false;
-    }
-  } catch (e) {
-    console.error(e);
-    if (!silent) showNotification('Save failed: ' + e.message, 'error');
+    document.querySelectorAll('#respTbody tr').forEach(tr => tr.classList.remove('row-modified'));
+    return true;
+  } else {
+    if (!silent) showNotification('Save failed.', 'error');
     return false;
   }
 }
@@ -572,40 +732,43 @@ function deleteRow(qid) {
   if (!tr) return;
   tr.remove();
   rowState.delete(qid);
-
-  const totalEl = document.getElementById('metricTotal');
-  totalEl.textContent = Math.max(
-    0,
-    parseInt(totalEl.textContent || '0', 10) - 1
-  );
+  const mt = document.getElementById('metricTotal');
+  mt.textContent = Math.max(0, parseInt(mt.textContent || '0', 10) - 1);
   updateProgress();
 }
+
+// ---------- EXPORT ----------
 
 function openExportModal() {
   document.getElementById('exportModal').classList.add('show');
 }
+
 function closeExportModal() {
   document.getElementById('exportModal').classList.remove('show');
 }
 
+// called by the top-right "EXPORT" button – just opens modal
+function handleExportClick() {
+  openExportModal();
+}
+
 async function confirmExportResponses() {
-  // 1) auto-save everything so backend has latest text
+  // 1) silently save everything so export pulls latest from DB
   const saved = await saveAll(true);
   if (!saved) {
-    showNotification('Could not save responses before export.', 'error');
+    showNotification('Nothing to export yet (no responses).', 'info');
+    closeExportModal();
     return;
   }
 
-  // 2) build export URL
+  // 2) Then trigger backend export
   const fmt = document.querySelector('input[name="respFormat"]:checked').value;
   const onlySuccess = document.getElementById('onlySuccessful').checked ? 'true' : '';
   const onlySel = document.getElementById('onlySelected').checked;
 
   let url = (fmt === 'docx') ? URLS.exportDocx : URLS.exportXlsx;
   const qs = new URLSearchParams();
-
   if (onlySuccess) qs.set('success', 'true');
-
   if (onlySel) {
     const ids = selectedQids();
     if (!ids.length) {
@@ -614,11 +777,9 @@ async function confirmExportResponses() {
     }
     qs.set('qids', ids.join(','));
   }
-
   const q = qs.toString();
   if (q) url += `?${q}`;
 
-  // 3) trigger download
   const a = document.createElement('a');
   a.href = url;
   a.style.display = 'none';
@@ -629,6 +790,8 @@ async function confirmExportResponses() {
   closeExportModal();
   showNotification('Export started.', 'success');
 }
+
+// ---------- UTIL ----------
 
 function escapeHtml(s) {
   return (s || '').replace(/[&<>\"']/g, m => ({
